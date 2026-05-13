@@ -4,228 +4,122 @@ import random
 from io import BytesIO
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-雙匯入整合版", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統-全自動極簡版", layout="wide")
 
-# --- 輔助函式：清理 ID ---
-def clean_id(val):
-    if pd.isna(val): return ""
-    s = re.sub(r'[\s\n\r\t\u200b-\u200d\ufeff]', '', str(val)).split('.')[0]
-    return '半職1' if '半職' in s else s
+# --- 1. 核心解析邏輯 (背景作業) ---
+def get_staff_data(file):
+    """從檔案 A 抓取姓名與權限"""
+    df = pd.read_excel(file, header=None)
+    staff_list = []
+    start_row = 0
+    # 尋找關鍵字定位
+    for r in range(min(15, len(df))):
+        row_str = "".join(str(v) for v in df.iloc[r].values)
+        if "姓名" in row_str or "職級" in row_str:
+            start_row = r
+            break
 
-# --- 輔助函式：偵測權限與銜接 ---
-def get_staff_base_data(df):
-    staff_data = {}
-    for i, row in df.iterrows():
-        sid = clean_id(row.iloc[1])
-        if sid and (sid.isdigit() or '半職' in sid):
-            perm = str(row.iloc[0]).strip().upper() if pd.notna(row.iloc[0]) else "DEN"
-            last_val = "off"
-            for cell in reversed(row.values):
-                c = str(cell).strip().upper()
-                if c in ["D", "E", "N", "OFF", "V", "R"]:
-                    last_val = c.lower() if c in ["OFF", "V"] else c
-                    break
-            staff_data[sid] = {"perm": perm, "last_day": last_val}
-    return staff_data
+    for i in range(start_row + 1, len(df)):
+        row = df.iloc[i]
+        if len(row) < 3: continue
+        # A欄:權限, B欄:序號, C欄:姓名
+        perm = str(row.iloc[0]).strip().upper() if pd.notna(row.iloc[0]) else "DEN"
+        no = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
+        name = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
+        if name in ["", "nan", "None", "星期", "ALL"]: continue
+        
+        staff_list.append({
+            "id": re.sub(r'[\s\u3000]', '', name), # 內部比對用
+            "display": f"{no} {name}".strip(),     # 輸出結果用
+            "perm": perm if perm != "NAN" else "DEN"
+        })
+    return staff_list
 
-# --- 輔助函式：偵測預約假與固定班 ---
-def get_vacation_import(df, names, num_days):
-    v_map = {n: [""] * num_days for n in names}
-    for i, row in df.iterrows():
-        sid = clean_id(row.iloc[1])
-        if sid in names:
-            for d in range(num_days):
-                col_idx = d + 3 # 假設日期從第 4 欄開始
-                if col_idx < len(row):
-                    val = str(row.iloc[col_idx]).strip().upper()
-                    if val in ["OFF", "V", "開會", "R"]:
-                        v_map[sid][d] = "R"
-                    elif val in ["D", "E", "N"]:
-                        v_map[sid][d] = val
-    return v_map
+# --- 2. 介面與上傳 ---
+st.title("🏥 2F 護理排班系統 (全背景同步版)")
 
-st.title("🏥 2F 護理排班系統 (雙匯入整合版)")
-
-# --- 1. 側邊欄：雙匯入區塊 ---
 with st.sidebar:
-    st.header("⚙️ 設定與匯入")
-    num_days = st.slider("本月排班天數", 28, 31, 31)
-    
-    st.divider()
-    st.subheader("📥 檔案 A：偵測權限與銜接")
-    base_file = st.file_uploader("上傳上月班表", type=["xlsx", "csv"], key="base")
-    
-    staff_configs = {}
-    if base_file:
-        try:
-            df_base = pd.read_csv(base_file, header=None) if base_file.name.endswith('.csv') else pd.read_excel(base_file, header=None)
-            staff_configs = get_staff_base_data(df_base)
-            st.success(f"✅ 已載入 {len(staff_configs)} 人名單")
-        except Exception as e:
-            st.error(f"讀取失敗: {e}")
+    st.header("📂 檔案上傳")
+    num_days = st.slider("本月天數", 28, 31, 31)
+    file_a = st.file_uploader("1. 上傳【班表】(檔案 A)", type=["xlsx"])
+    file_b = st.file_uploader("2. 上傳【預班表】(檔案 B)", type=["xlsx"])
 
-    st.divider()
-    st.subheader("📥 檔案 B：自訂假與固定班")
-    vac_file = st.file_uploader("上傳本月預約表 (選填)", type=["xlsx", "csv"], key="vac")
-    
-    imported_v_map = None
-    if vac_file and staff_configs:
-        try:
-            df_vac = pd.read_csv(vac_file, header=None) if vac_file.name.endswith('.csv') else pd.read_excel(vac_file, header=None)
-            imported_v_map = get_vacation_import(df_vac, list(staff_configs.keys()), num_days)
-            st.success("✅ 已載入自訂休假與固定班")
-        except Exception as e:
-            st.warning(f"預約表讀取失敗: {e}")
-
-if not staff_configs:
-    st.info("💡 請先在左側上傳「檔案 A」以產生成員名單。")
-    st.stop()
-
-# --- 2. 銜接核對 ---
-st.subheader("⚙️ 核對權限與銜接狀態")
-names = list(staff_configs.keys())
-history_final, perm_final, cont_days_final = {}, {}, {}
-cols = st.columns(4)
-for i, n in enumerate(names):
-    with cols[i % 4]:
-        perm_final[n] = st.text_input(f"{n} 權限", value=staff_configs[n]["perm"], key=f"p_{n}")
-        history_final[n] = st.selectbox(f"{n} 上次", ["D", "E", "N", "off", "v", "R"], 
-                                       index=["D", "E", "N", "off", "v", "R"].index(staff_configs[n]["last_day"]), key=f"h_{n}")
-        cont_days_final[n] = st.number_input(f"{n} 連續天數", 0, 6, 0, key=f"c_{n}")
-
-# --- 3. 預約假表格 ---
-st.subheader("📅 自訂休假與固定班 (R 為休假)")
-dates = [f"{i+1}日" for i in range(num_days)]
-
-# 如果有匯入檔案 B，則初始化表格
-if 'v_df' not in st.session_state or st.session_state.v_df.index.tolist() != names:
-    if imported_v_map:
-        st.session_state.v_df = pd.DataFrame(imported_v_map).T
-        st.session_state.v_df.columns = dates
-    else:
-        st.session_state.v_df = pd.DataFrame("", index=names, columns=dates)
-
-# 提供手動微調
-edited_df = st.data_editor(st.session_state.v_df, use_container_width=True)
-
-# --- 4. 核心邏輯 ---
-def run_scheduling(days, hist, cont, v_table, perms):
-    res = {n: [""] * days for n in names}
-    
-    # 半職1 邏輯 (10天, 2-3連班)
-    if "半職1" in names:
-        pt_row = v_table.loc["半職1"]
-        pt_reserved = [d for d in range(days) if str(pt_row.iloc[d]).strip().upper() in ["R", "V", "OFF"]]
-        for d in pt_reserved: res["半職1"][d] = "R"
-        pt_work = []
-        for _ in range(3000):
-            tmp, last, ok = [], -2, True
-            blocks = [3, 3, 2, 2]; random.shuffle(blocks)
-            for b in blocks:
-                starts = [s for s in range(days) if s > last+1 and s+b <= days and all(s+i not in pt_reserved for i in range(b))]
-                if not starts: ok = False; break
-                s = random.choice(starts); tmp.extend(range(s, s+b)); last = s+b-1
-            if ok and len(tmp) == 10: pt_work = tmp; break
-        if pt_work:
-            for d in pt_work: res["半職1"][d] = "D"
-        for d in range(days):
-            if res["半職1"][d] == "": res["半職1"][d] = "off"
-
-    # 全員 4D/3E/2N 補人
-    others = [n for n in names if n != "半職1"]
-    for d in range(days):
-        target = {"D": 4, "E": 3, "N": 2}
-        if "半職1" in res and res["半職1"][d] == "D": target["D"] -= 1
-        
-        pool = others.copy()
-        random.shuffle(pool)
-        
-        for n in others:
-            val = str(v_table.loc[n, f"{d+1}日"]).strip().upper()
-            if val in ["D", "E", "N"]:
-                res[n][d] = val; target[val] -= 1; pool.remove(n)
-            elif val in ["R", "V", "OFF", "開會"]:
-                res[n][d] = "R"; pool.remove(n)
-            else:
-                prev = res[n][d-1] if d > 0 else hist[n]
-                if prev == "N": res[n][d] = "v"; pool.remove(n)
-                # 連班天數保護 (第一天)
-                elif d == 0 and cont[n] >= 5: res[n][d] = "off"; pool.remove(n)
-
-        for shift in ["N", "E", "D"]:
-            qualified = [n for n in pool if shift in perms[n].upper()]
-            random.shuffle(qualified)
-            for _ in range(max(0, target[shift])):
-                if qualified:
-                    staff = qualified.pop(); res[staff][d] = shift; pool.remove(staff)
-        
-        for n in pool: res[n][d] = "off"
-            
-    return pd.DataFrame(res).T, None
-
-# --- 5. 啟動 ---
-if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
-    final_res, err = run_scheduling(num_days, history_final, cont_days_final, edited_df, perm_final)
-    if err:
-        st.error(err)
-    else:
-        st.success("✅ 排班成功！")
-        def style_f(v):
-            colors = {'D': '#FFF9C4', 'E': '#C8E6C9', 'N': '#BBDEFB', 'R': '#FFCDD2'}
-            return f'background-color: {colors.get(v, "transparent")}; color: black; font-weight: bold'
-        st.dataframe(final_res.style.map(style_f), use_container_width=True)
-        out = BytesIO()
-        with pd.ExcelWriter(out, engine='openpyxl') as writer:
-            final_res.to_excel(writer, sheet_name='建議班表')
-        st.download_button("📥 下載 Excel 結果", out.getvalue(), "2F_Schedule.xlsx")
-# ==========================================
-# 貼在 app.py 最下方：全自動背景同步與排班模組
-# ==========================================
-import re
-
-# 只要 file_a 和 file_b 都上傳了，就啟動背景處理
-if 'file_a' in locals() and 'file_b' in locals() and file_a and file_b:
+# --- 3. 背景自動處理邏輯 ---
+if file_a and file_b:
     try:
-        # 1. 讀取 Excel
-        df_a_sync = pd.read_excel(file_a, header=None)
-        df_b_sync = pd.read_excel(file_b, header=None)
-        
-        # 2. 建立人員與預約假字典
-        sync_vacation_data = {} # 格式: { '去空格姓名': ['R', '', 'D', ...] }
-        
-        # 先抓取檔案 A 的所有人名清單
-        for i in range(2, len(df_a_sync)):
-            name_a = str(df_a_sync.iloc[i, 2]).strip()
-            if name_a and name_a != "nan" and "星期" not in name_a:
-                pure_id = re.sub(r'[\s\u3000]', '', name_a)
-                # 初始化該人的假表 (長度為 num_days)
-                sync_vacation_data[pure_id] = [""] * num_days
+        # 背景讀取人員名單
+        staff_data = get_staff_data(file_a)
+        sids = [s['id'] for s in staff_data]
+        displays = {s['id']: s['display'] for s in staff_data}
+        perms = {s['id']: s['perm'] for s in staff_data}
 
-        # 3. 從檔案 B 抓取假別並填入字典
-        for i in range(len(df_b_sync)):
-            name_b = str(df_b_sync.iloc[i, 2]).strip()
-            b_id = re.sub(r'[\s\u3000]', '', name_b)
+        # 背景讀取檔案 B 預約假
+        df_b = pd.read_excel(file_b, header=None)
+        # 初始化預約字典 { '姓名ID': ['假別1', '假別2', ...] }
+        bg_vacations = {sid: [""] * num_days for sid in sids}
+
+        for i in range(len(df_b)):
+            name_b_raw = str(df_b.iloc[i, 2]).strip()
+            sid_b = re.sub(r'[\s\u3000]', '', name_b_raw)
             
-            if b_id in sync_vacation_data:
+            if sid_b in bg_vacations:
                 for d in range(num_days):
-                    cell = str(df_b_sync.iloc[i, d+3]).strip().upper() if (d+3) < len(df_b_sync.columns) else ""
-                    # 自動轉換假別格式
-                    if cell in ["R", "OFF", "V", "開會", "0", "O"]:
-                        sync_vacation_data[b_id][d] = "R"
-                    elif cell in ["D", "E", "N"]:
-                        sync_vacation_data[b_id][d] = cell
+                    # 日期從第 4 欄 (Index 3) 開始
+                    val = str(df_b.iloc[i, d+3]).strip().upper() if (d+3) < len(df_b.columns) else ""
+                    # 自動將雜訊符號轉為 R班 (休假)
+                    if val in ["R", "OFF", "V", "開會", "0", "O", "●"]:
+                        bg_vacations[sid_b][d] = "R"
+                    elif val in ["D", "E", "N"]:
+                        bg_vacations[sid_b][d] = val
 
-        st.success("✅ 預班表資料已在背景同步完成，您可以直接排班。")
+        st.success(f"✅ 已辨識 {len(staff_data)} 位人員，預班表資料已在背景同步完成。")
+        st.info("💡 介面已簡化：預約表格已隱藏，請直接執行下方排班按鈕。")
 
-        # 4. 修改原本的排班按鈕邏輯 (或是新增一個專用按鈕)
-        if st.button("🚀 執行自動排班 (含預班表資料)", type="primary", use_container_width=True):
-            # 這裡直接引用 sync_vacation_data 進行排班計算
-            # ... (這裡接你原本的隨機排班迴圈) ...
-            st.info("正在根據同步後的資料計算班表...")
+        # --- 4. 自動排班運算 ---
+        if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
+            schedule_results = {sid: [""] * num_days for sid in sids}
             
-            # 舉例：在你的排班迴圈中，原本讀取網頁表格的地方，改讀 sync_vacation_data[sid][d]
+            for d in range(num_days):
+                target = {"D": 4, "E": 3, "N": 2} # 標準人力配置
+                pool = sids.copy()
+                random.shuffle(pool)
+                
+                # A. 先套用背景抓到的預約假
+                for sid in sids:
+                    v_val = bg_vacations[sid][d]
+                    if v_val in ["D", "E", "N"]:
+                        schedule_results[sid][d] = v_val
+                        target[v_val] -= 1
+                        pool.remove(sid)
+                    elif v_val == "R":
+                        schedule_results[sid][d] = "off"
+                        pool.remove(sid)
+                
+                # B. 分配剩餘人力 (按權限 N -> E -> D)
+                for shift in ["N", "E", "D"]:
+                    qualified = [s for s in pool if shift in perms[s]]
+                    for _ in range(max(0, target[shift])):
+                        if qualified:
+                            chosen = qualified.pop()
+                            schedule_results[chosen][d] = shift
+                            pool.remove(chosen)
+                
+                # C. 剩下的人全部休息
+                for s in pool:
+                    schedule_results[s][d] = "off"
             
+            # --- 5. 顯示與下載排班結果 ---
+            st.subheader("🎉 最終排班結果")
+            final_df = pd.DataFrame(schedule_results).T
+            final_df.index = [displays[sid] for sid in sids]
+            st.dataframe(final_df, use_container_width=True)
+            
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                final_df.to_excel(writer)
+            st.download_button("📥 下載 Excel 結果", output.getvalue(), "2F_Schedule_Final.xlsx")
+
     except Exception as e:
-        st.error(f"背景同步失敗: {e}")
-# ==========================================
-# ==========================================
+        st.error(f"背景同步或排班運算發生錯誤: {e}")
+else:
+    st.info("👋 您好！請在左側上傳【班表】與【預班表】Excel 檔案以開始排班。")
