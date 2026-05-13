@@ -236,3 +236,81 @@ if file_a and file_b:
 
     except Exception as e:
         st.error(f"同步過程發生錯誤: {e}")
+# ==========================================
+# 貼在 app.py 最下方：自動同步與預約假編輯模組
+# ==========================================
+import re
+
+# 確保在檔案都上傳後才顯示
+if file_a and file_b:
+    st.markdown("---")
+    st.subheader("📅 預約假自動同步與確認")
+    st.info("點擊下方按鈕，系統會自動將【預班表】中的 R、OFF、開會等假別填入表格。")
+
+    try:
+        # 1. 解析檔案 A 建立基礎名單
+        df_a_raw = pd.read_excel(file_a, header=None)
+        df_b_raw = pd.read_excel(file_b, header=None)
+        
+        staff_info = []
+        # 從第 3 行開始抓取 (根據你的 Excel 結構)
+        for i in range(2, len(df_a_raw)):
+            row = df_a_raw.iloc[i]
+            perm = str(row.iloc[0]).strip().upper() if pd.notna(row.iloc[0]) else "DEN"
+            no = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
+            name = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
+            
+            if name and name != "nan" and "星期" not in name:
+                # 建立比對 ID (去空格姓名) 與 顯示標籤 (序號+姓名)
+                pure_id = re.sub(r'[\s\u3000]', '', name)
+                display_label = f"{no} {name}".strip()
+                staff_info.append({"id": pure_id, "label": display_label, "perm": perm})
+
+        # 2. 初始化或保持表格狀態
+        all_labels = [s['label'] for s in staff_info]
+        all_ids = [s['id'] for s in staff_info]
+        
+        if 'sync_table' not in st.session_state or len(st.session_state.sync_table) != len(all_labels):
+            st.session_state.sync_table = pd.DataFrame(
+                "", index=all_labels, columns=[f"{d+1}日" for d in range(num_days)]
+            )
+
+        # 3. 同步按鈕邏輯
+        if st.button("🔄 執行自動同步 (從預班表抓取)", type="primary", use_container_width=True):
+            updated_df = st.session_state.sync_table.copy()
+            
+            # 遍歷預班表 (檔案 B)
+            for i in range(len(df_b_raw)):
+                b_name_raw = str(df_b_raw.iloc[i, 2]).strip()
+                b_id = re.sub(r'[\s\u3000]', '', b_name_raw)
+                
+                if b_id in all_ids:
+                    target_row = all_labels[all_ids.index(b_id)]
+                    # 假別從第 4 欄開始 (Index 3)
+                    for d in range(num_days):
+                        cell_val = str(df_b_raw.iloc[i, d+3]).strip().upper() if (d+3) < len(df_b_raw.columns) else ""
+                        # 轉換規則
+                        if cell_val in ["R", "OFF", "V", "開會", "0", "O"]:
+                            updated_df.loc[target_row, f"{d+1}日"] = "R"
+                        elif cell_val in ["D", "E", "N"]:
+                            updated_df.loc[target_row, f"{d+1}日"] = cell_val
+            
+            st.session_state.sync_table = updated_df
+            st.toast("✅ 已成功從預班表同步假別！")
+
+        # 4. 即時編輯器
+        st.write("💡 你可以直接在下方表格修改假別，修改後將作為自動排班的依據：")
+        final_vacation_df = st.data_editor(st.session_state.sync_table, use_container_width=True)
+
+        # 5. 提供結果下載
+        col1, col2 = st.columns(2)
+        with col1:
+            st.success("確認無誤後，即可點擊上方原本的排班按鈕。")
+        with col2:
+            sync_out = BytesIO()
+            with pd.ExcelWriter(sync_out) as w: final_vacation_df.to_excel(w)
+            st.download_button("📥 下載目前確認的預約表", sync_out.getvalue(), "Confirmed_Vacation.xlsx")
+
+    except Exception as e:
+        st.error(f"同步模組執行錯誤：{e}")
+# ==========================================
