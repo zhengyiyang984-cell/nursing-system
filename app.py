@@ -178,3 +178,61 @@ if st.button("🚀 啟動自動排班", type="primary", use_container_width=True
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
             final_res.to_excel(writer, sheet_name='建議班表')
         st.download_button("📥 下載 Excel 結果", out.getvalue(), "2F_Schedule.xlsx")
+# --- 以下是新增的自動同步與顯示區塊 ---
+import re
+
+if file_a and file_b:
+    st.markdown("---")
+    st.subheader("🔄 預約班表自動同步區")
+    
+    # 1. 讀取與解析資料
+    try:
+        # 讀取檔案 A 建立人員清單
+        df_a_sync = pd.read_excel(file_a, header=None)
+        # 讀取檔案 B 獲取預約假
+        df_b_sync = pd.read_excel(file_b, header=None)
+        
+        # 建立比對 ID (移除空格的姓名)
+        sids = []
+        labels = []
+        for i in range(2, len(df_a_sync)):
+            name = str(df_a_sync.iloc[i, 2]).strip()
+            no = str(df_a_sync.iloc[i, 1]).strip()
+            if name and name != "nan" and "星期" not in name:
+                pure_id = re.sub(r'[\s\u3000]', '', name)
+                sids.append(pure_id)
+                labels.append(f"{no} {name}")
+
+        # 2. 初始化同步表格 (Session State)
+        if 'sync_df' not in st.session_state or len(st.session_state.sync_df) != len(sids):
+            st.session_state.sync_df = pd.DataFrame("", index=labels, columns=[f"{d+1}日" for d in range(num_days)])
+
+        # 3. 按鈕啟動同步
+        if st.button("點擊同步：將【預班表】填入下方表格", type="primary", use_container_width=True):
+            new_df = st.session_state.sync_df.copy()
+            for i in range(len(df_b_sync)):
+                b_raw_name = str(df_b_sync.iloc[i, 2]).strip()
+                b_id = re.sub(r'[\s\u3000]', '', b_raw_name)
+                
+                if b_id in sids:
+                    row_name = labels[sids.index(b_id)]
+                    for d in range(num_days):
+                        val = str(df_b_sync.iloc[i, d+3]).strip().upper() if (d+3) < len(df_b_sync.columns) else ""
+                        if val in ["R", "OFF", "V", "開會", "0"]:
+                            new_df.loc[row_name, f"{d+1}日"] = "R"
+                        elif val in ["D", "E", "N"]:
+                            new_df.loc[row_name, f"{d+1}日"] = val
+            st.session_state.sync_df = new_df
+            st.toast("✅ 同步完成！")
+
+        # 4. 顯示編輯器，讓你可以微調
+        st.write("請確認或修改預約假：")
+        final_edited_df = st.data_editor(st.session_state.sync_df, use_container_width=True)
+
+        # 5. 下載同步後的預約表 (可選)
+        out_sync = BytesIO()
+        with pd.ExcelWriter(out_sync) as w: final_edited_df.to_excel(w)
+        st.download_button("📥 下載這份預約資料", out_sync.getvalue(), "Synced_Vacation.xlsx")
+
+    except Exception as e:
+        st.error(f"同步過程發生錯誤: {e}")
