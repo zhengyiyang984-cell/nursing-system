@@ -89,3 +89,6 @@ if st.button("🚀 啟動自動排班", type="primary", use_container_width=True
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
             final_res.to_excel(writer, sheet_name='建議班表')
         st.download_button("📥 下載 Excel 結果", out.getvalue(), "2F_Schedule.xlsx")
+# 找到這一段，確保有寫 engine='openpyxl'
+with pd.ExcelWriter(out, engine='openpyxl') as writer:
+    final_res.to_excel(writer, sheet_name='建議班表')
