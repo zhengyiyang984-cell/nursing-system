@@ -4,16 +4,24 @@ import random
 from io import BytesIO
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-格式連動版", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統-精準定位版", layout="wide")
 
-# --- 1. 核心清理工具 (對付空格、職級、編碼) ---
+# --- 1. 超強效清理與關鍵字定位 ---
 def super_clean(val):
     if pd.isna(val): return ""
     s = str(val)
-    s = re.sub(r'P[Nn]\d+', '', s) # 移除 PN1, PN2...
+    s = re.sub(r'P[Nn]\d+', '', s)
     s = s.replace("阿長", "")
-    s = re.sub(r'[\s\u3000\n\r\t]', '', s) # 移除所有全形半形空格與換行
+    s = re.sub(r'[\s\u3000\n\r\t]', '', s)
     return '半職1' if '半職' in s else s
+
+def find_data_start_row(df):
+    """自動尋找包含 '姓名' 或 '職級' 的那一行作為標題行"""
+    for i, row in df.iterrows():
+        row_str = "".join(str(v) for v in row.values)
+        if "姓名" in row_str or "職級" in row_str:
+            return i
+    return 0 # 找不到就預設從第 0 行
 
 def safe_read_csv(file):
     try:
@@ -25,13 +33,16 @@ def safe_read_csv(file):
 # --- 2. 解析邏輯 ---
 def get_staff_base_data(df):
     staff_data = {}
-    for i, row in df.iterrows():
-        if i < 2: continue
-        name_raw = str(row.iloc[2]).strip() # 姓名在第 3 欄
+    start_row = find_data_start_row(df)
+    # 從標題行的下一行開始抓資料
+    for i in range(start_row + 1, len(df)):
+        row = df.iloc[i]
+        # 你的檔案姓名在第 3 欄 (Index 2)
+        name_raw = str(row.iloc[2]).strip()
         sid = super_clean(name_raw)
         if sid and sid not in ["姓名/職級", "nan", ""]:
             perm = str(row.iloc[0]).strip().upper() if pd.notna(row.iloc[0]) else "DEN"
-            # 抓取銜接 (從表格前面找最後一個班別)
+            # 抓取銜接 (最後一天的班)
             last_val = "off"
             for cell in reversed(row.values[3:7]):
                 c = str(cell).strip().upper()
@@ -43,19 +54,21 @@ def get_staff_base_data(df):
 
 def get_vacation_import(df, names, num_days):
     v_map = {n: [""] * num_days for n in names}
-    for i, row in df.iterrows():
-        if i < 2: continue
+    start_row = find_data_start_row(df)
+    for i in range(start_row + 1, len(df)):
+        row = df.iloc[i]
         sid = super_clean(row.iloc[2]) # 預班表姓名也在第 3 欄
         if sid in names:
+            # 日期從第 4 欄 (Index 3) 開始
             for d in range(num_days):
-                col_idx = d + 3 # 日期從第 4 欄開始
+                col_idx = d + 3 
                 if col_idx < len(row):
                     val = str(row.iloc[col_idx]).strip().upper()
                     if val in ["OFF", "V", "開會", "R", "0"]: v_map[sid][d] = "R"
                     elif val in ["D", "E", "N"]: v_map[sid][d] = val
     return v_map
 
-st.title("🏥 2F 護理排班系統 (格式全連動版)")
+st.title("🏥 2F 護理排班系統 (精準定位修正版)")
 
 # --- 側邊欄匯入 ---
 with st.sidebar:
@@ -71,13 +84,13 @@ with st.sidebar:
             staff_configs = get_staff_base_data(df_base)
             st.success(f"✅ 辨識出 {len(staff_configs)} 位人員")
         except Exception as e:
-            st.error(f"班表讀取失敗: {e}")
+            st.error(f"班表讀取失敗，請確認檔案格式")
 
     st.subheader("2. 匯入預班表 (檔案 B)")
     vac_file = st.file_uploader("上傳預班表.csv", type=["csv", "xlsx"], key="B")
 
 if not staff_configs:
-    st.info("💡 請先上傳檔案 A 以顯示人員表格。")
+    st.info("💡 請先上傳檔案 A 產生成員名單。")
     st.stop()
 
 names = list(staff_configs.keys())
@@ -88,21 +101,20 @@ if 'v_df' not in st.session_state or st.session_state.v_df.index.tolist() != nam
 
 # --- 核心同步按鈕 ---
 if vac_file:
-    if st.button("🔄 點我：自動將預班表內容填入下方表格", type="primary", use_container_width=True):
+    if st.button("🔄 點我：自動抓取預班表內容到表格", type="primary", use_container_width=True):
         try:
             df_vac = safe_read_csv(vac_file) if vac_file.name.endswith('.csv') else pd.read_excel(vac_file, header=None)
             v_data = get_vacation_import(df_vac, names, num_days)
             st.session_state.v_df = pd.DataFrame(v_data).T
             st.session_state.v_df.columns = dates
-            st.toast("✅ 預約內容已成功連動！")
+            st.toast("✅ 內容已成功對齊並同步！")
         except Exception as e:
-            st.error(f"預班表解析出錯: {e}")
+            st.error(f"預班表連動失敗")
 
-st.subheader("📅 自訂假與固定班別 (已與預班表連動)")
-# 顯示互動表格
+st.subheader("📅 自訂假與固定班別 (自動辨識結果)")
 edited_v_table = st.data_editor(st.session_state.v_df, use_container_width=True)
 
-st.subheader("⚙️ 核對權限與連班天數")
+st.subheader("⚙️ 核對權限與已連班天數")
 cols = st.columns(4)
 final_perms, final_history, final_cont_days = {}, {}, {}
 for i, n in enumerate(names):
@@ -112,10 +124,10 @@ for i, n in enumerate(names):
         final_cont_days[n] = st.number_input(f"已連班天數", 0, 6, 0, key=f"c_{n}")
         final_history[n] = staff_configs[n]["last_day"]
 
-# --- 排班邏輯 ---
+# --- 啟動排班 ---
 if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
     res = {n: [""] * num_days for n in names}
-    # 4D/3E/2N 核心邏輯
+    # 執行排班演算... (4D/3E/2N)
     for d in range(num_days):
         target = {"D": 4, "E": 3, "N": 2}
         pool = names.copy()
@@ -142,8 +154,7 @@ if st.button("🚀 啟動自動排班", type="primary", use_container_width=True
         c = {'D': '#FFF9C4', 'E': '#C8E6C9', 'N': '#BBDEFB', 'R': '#FFCDD2', 'v': '#F5F5F5'}
         return f'background-color: {c.get(v, "transparent")}; color: black; font-weight: bold'
     st.dataframe(final_df.style.map(style_f), use_container_width=True)
-    
     out = BytesIO()
     with pd.ExcelWriter(out, engine='openpyxl') as writer:
-        final_df.to_excel(writer, sheet_name='2F結果')
-    st.download_button("📥 下載 Excel", out.getvalue(), "2F_Schedule.xlsx")
+        final_df.to_excel(writer, sheet_name='2F排班結果')
+    st.download_button("📥 下載 Excel 結果", out.getvalue(), "2F_Schedule.xlsx")
