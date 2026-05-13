@@ -238,74 +238,53 @@ if file_a and file_b:
         st.error(f"同步過程發生錯誤: {e}")
 
 
+# ==========================================
+# 貼在 app.py 最下方：全自動背景同步與排班模組
+# ==========================================
 import re
 
-# 檢查變數名稱是否與你前面一致 (file_a, file_b, num_days)
+# 只要 file_a 和 file_b 都上傳了，就啟動背景處理
 if 'file_a' in locals() and 'file_b' in locals() and file_a and file_b:
-    st.markdown("---")
-    st.subheader("🔄 預班表自動同步區")
-    st.info("點擊下方按鈕，系統會將【預班表】中的假別（R, OFF, D, E, N）自動填入網頁表格。")
-
     try:
         # 1. 讀取 Excel
         df_a_sync = pd.read_excel(file_a, header=None)
         df_b_sync = pd.read_excel(file_b, header=None)
         
-        # 2. 建立人員對應清單 (對齊檔案 A 的格式)
-        sync_staff_list = []
+        # 2. 建立人員與預約假字典
+        sync_vacation_data = {} # 格式: { '去空格姓名': ['R', '', 'D', ...] }
+        
+        # 先抓取檔案 A 的所有人名清單
         for i in range(2, len(df_a_sync)):
-            row = df_a_sync.iloc[i]
-            # 抓取：A欄權限, B欄序號, C欄姓名
-            perm = str(row.iloc[0]).strip().upper() if pd.notna(row.iloc[0]) else "DEN"
-            no = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
-            name = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
+            name_a = str(df_a_sync.iloc[i, 2]).strip()
+            if name_a and name_a != "nan" and "星期" not in name_a:
+                pure_id = re.sub(r'[\s\u3000]', '', name_a)
+                # 初始化該人的假表 (長度為 num_days)
+                sync_vacation_data[pure_id] = [""] * num_days
+
+        # 3. 從檔案 B 抓取假別並填入字典
+        for i in range(len(df_b_sync)):
+            name_b = str(df_b_sync.iloc[i, 2]).strip()
+            b_id = re.sub(r'[\s\u3000]', '', name_b)
             
-            if name and name != "nan" and "星期" not in name:
-                pure_id = re.sub(r'[\s\u3000]', '', name) # 去空格姓名用於比對
-                display_label = f"{no} {name}".strip()    # 序號+姓名用於顯示
-                sync_staff_list.append({"id": pure_id, "label": display_label, "perm": perm})
+            if b_id in sync_vacation_data:
+                for d in range(num_days):
+                    cell = str(df_b_sync.iloc[i, d+3]).strip().upper() if (d+3) < len(df_b_sync.columns) else ""
+                    # 自動轉換假別格式
+                    if cell in ["R", "OFF", "V", "開會", "0", "O"]:
+                        sync_vacation_data[b_id][d] = "R"
+                    elif cell in ["D", "E", "N"]:
+                        sync_vacation_data[b_id][d] = cell
 
-        all_labels = [s['label'] for s in sync_staff_list]
-        all_ids = [s['id'] for s in sync_staff_list]
+        st.success("✅ 預班表資料已在背景同步完成，您可以直接排班。")
 
-        # 3. 初始化 Session State 記憶表格內容
-        if 'vacation_table' not in st.session_state or len(st.session_state.vacation_table) != len(all_labels):
-            st.session_state.vacation_table = pd.DataFrame(
-                "", index=all_labels, columns=[f"{d+1}日" for d in range(num_days)]
-            )
-
-        # 4. 同步按鈕：從檔案 B 抓資料到網頁
-        if st.button("🚀 執行自動同步 (從預班表抓取)", type="primary", use_container_width=True):
-            updated_df = st.session_state.vacation_table.copy()
+        # 4. 修改原本的排班按鈕邏輯 (或是新增一個專用按鈕)
+        if st.button("🚀 執行自動排班 (含預班表資料)", type="primary", use_container_width=True):
+            # 這裡直接引用 sync_vacation_data 進行排班計算
+            # ... (這裡接你原本的隨機排班迴圈) ...
+            st.info("正在根據同步後的資料計算班表...")
             
-            # 遍歷預班表 (檔案 B) 找人名比對
-            for i in range(len(df_b_sync)):
-                b_name_raw = str(df_b_sync.iloc[i, 2]).strip()
-                b_id = re.sub(r'[\s\u3000]', '', b_name_raw)
-                
-                if b_id in all_ids:
-                    row_key = all_labels[all_ids.index(b_id)]
-                    # 日期從第 4 欄 (Index 3) 開始
-                    for d in range(num_days):
-                        cell = str(df_b_sync.iloc[i, d+3]).strip().upper() if (d+3) < len(df_b_sync.columns) else ""
-                        # 轉換假別規則
-                        if cell in ["R", "OFF", "V", "開會", "0", "O"]:
-                            updated_df.loc[row_key, f"{d+1}日"] = "R"
-                        elif cell in ["D", "E", "N"]:
-                            updated_df.loc[row_key, f"{d+1}日"] = cell
+            # 舉例：在你的排班迴圈中，原本讀取網頁表格的地方，改讀 sync_vacation_data[sid][d]
             
-            st.session_state.vacation_table = updated_df
-            st.toast("✅ 已成功從預班表匯入假別！")
-
-        # 5. 網頁編輯器：顯示同步結果並允許手動修改
-        st.write("同步完成後，如有需要可直接在下方表格手動微調：")
-        final_edited_table = st.data_editor(st.session_state.vacation_table, use_container_width=True)
-
-        # 6. 下載當前確認的預約假 (備份用)
-        sync_out = BytesIO()
-        with pd.ExcelWriter(sync_out) as w: final_edited_table.to_excel(w)
-        st.download_button("📥 下載這份已確認的假表", sync_out.getvalue(), "Confirmed_Vacation.xlsx")
-
     except Exception as e:
-        st.error(f"同步功能載入失敗，請確認檔案格式是否正確。錯誤訊息: {e}")
+        st.error(f"背景同步失敗: {e}")
 # ==========================================
