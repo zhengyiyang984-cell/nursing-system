@@ -88,7 +88,7 @@ if file_a and file_b:
         for i, n in enumerate(display_names):
             with cols[i % 4]:
                 with st.container(border=True):
-                    st.markdown(f"{n}**")
+                    st.markdown(f"{n}")
                     perm_final[n] = st.text_input(f"權限", value=staff_configs[n]["perm"], key=f"p_{n}")
                     history_final[n] = st.selectbox(f"上次班別", ["D", "E", "N", "off", "v", "R"], 
                                                    index=["D", "E", "N", "off", "v", "R"].index(staff_configs[n]["last_day"]), 
