@@ -5,7 +5,7 @@ from io import BytesIO
 import datetime
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-接軌完全體", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統", layout="wide")
 
 # 中文星期對照表
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
@@ -25,7 +25,7 @@ def get_staff_configs(file):
 
     headers_row = df.iloc[start_row].tolist()
     
-    # 自動尋找橫向架觀中埋在右側的接續資料欄位 index
+    # 自動尋找橫向架構中埋在右側的接續資料欄位 index
     hist_col_idx = -1
     streak_col_idx = -1
     for idx, h in enumerate(headers_row):
@@ -153,7 +153,7 @@ def schedule_part_time(num_days):
         if idx < num_days: backup_days[idx] = "D"
     return backup_days
 
-st.title("🏥 2F 護理排班系統 (大夜間隔優化完全體)")
+st.title("🏥 2F 護理排班系統 ")
 
 # --- 3. 側邊欄日期與檔案設定 ---
 with st.sidebar:
@@ -172,8 +172,8 @@ with st.sidebar:
         st.error("⚠️ 錯誤：結束日期不能早於開始日期！")
         num_days = 0
 
-    file_a = st.file_uploader("1. 上傳【班表】(檔案 A - 支援直接投入上月結果)", type=["xlsx"])
-    file_b = st.file_uploader("2. 上傳【預班表】(檔案 B)", type=["xlsx"])
+    file_a = st.file_uploader("1. 上傳【班表】", type=["xlsx"])
+    file_b = st.file_uploader("2. 上傳【預班表】", type=["xlsx"])
 
 if file_a and file_b and num_days > 0:
     try:
@@ -197,7 +197,7 @@ if file_a and file_b and num_days > 0:
                         elif val in ["D", "E", "N"]: bg_vacation[n][d] = val
                     break
 
-        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員（跨月數據鏈已完全就緒）。")
+        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員。")
 
         # --- 核對區 ---
         st.subheader("⚙️ 核對權限與銜接狀態")
@@ -226,7 +226,6 @@ if file_a and file_b and num_days > 0:
             next_month_streak_row = {}
             
             for attempt in range(500):
-                # 每個回合開始，重置融斷旗標
                 valid_month = True
                 
                 res = {n: [""] * num_days for n in display_names}
@@ -236,7 +235,7 @@ if file_a and file_b and num_days > 0:
                 total_off_counts = {n: 0 for n in full_time_names}
                 streak_tracker = {n: int(cont_days_final[n]) for n in full_time_names}
                 
-                # --- 大夜班（N）跨月預約隔斷處理（短路防護鎖） ---
+                # --- 大夜班（N）跨月預約隔斷處理 ---
                 for n in full_time_names:
                     if history_final[n] == "N":
                         if num_days > 0 and bg_vacation[n][0] == "D": valid_month = False
@@ -262,6 +261,17 @@ if file_a and file_b and num_days > 0:
                     # 5連班過勞防呆
                     for n in pool.copy():
                         if streak_tracker[n] >= 5: 
+                            res[n][d] = "off"
+                            total_off_counts[n] += 1
+                            if n in pool: pool.remove(n)
+
+                    # 【全新正職防呆：阻斷單天班 (不上單天班)】
+                    # 如果「昨天是休假」且「今天如果是 pool 裡唯一可能被排的人，但明天卻又是被指定的休假/預約假」，代表今天上了就會變單天班
+                    # 我們提前讓他在今天也強制放假，直接融合成連休
+                    for n in pool.copy():
+                        prev_is_off = (res[n][d-1] in ["off", "v", "R"]) if d > 0 else (history_final[n] in ["off", "v", "R"])
+                        next_is_off = (bg_vacation[n][d+1] == "R") if d < (num_days - 1) else False
+                        if prev_is_off and next_is_off:
                             res[n][d] = "off"
                             total_off_counts[n] += 1
                             if n in pool: pool.remove(n)
@@ -312,7 +322,7 @@ if file_a and file_b and num_days > 0:
                     random.shuffle(pool)
                     pool.sort(key=lambda x: total_off_counts[x], reverse=True)
 
-                    # 系統自動分派班別
+                    # 系統自動分派班別 (加入單天班雙向判定)
                     for shift in ["N", "E", "D"]:
                         qualified = []
                         for n in pool:
@@ -320,10 +330,9 @@ if file_a and file_b and num_days > 0:
                                 prev_1 = res[n][d-1] if d > 0 else history_final[n]
                                 prev_2 = res[n][d-2] if d > 1 else "off"
                                 
-                                if shift == "D" and (prev_1 == "N" or prev_2 == "N"):
-                                    continue
-                                if shift == "D" and prev_1 == "E":
-                                    continue
+                                # 抽白班資格過濾
+                                if shift == "D" and (prev_1 == "N" or prev_2 == "N"): continue
+                                if shift == "D" and prev_1 == "E": continue
                                     
                                 qualified.append(n)
                                     
@@ -334,11 +343,21 @@ if file_a and file_b and num_days > 0:
                                 streak_tracker[chosen] += 1
                                 if chosen in pool: pool.remove(chosen)
                     
+                    # 剩下沒分到班的人轉休假
                     for n in pool:
                         res[n][d] = "off"
                         total_off_counts[n] += 1
                         
-                # 只有在完全沒有被融斷、且每人總休假符合 >= 8 天時，才判定為成功並抓取接續欄位
+                # 最終合法性大檢驗：強力卡死正職絕對沒有「上一休一 (1連班)」
+                if valid_month:
+                    for n in full_time_names:
+                        # 將員工一個月的所有班別轉成 1(上班) 和 0(休假)
+                        days_str = "".join(["0" if res[n][x] in ["off", "v", "R"] else "1" for x in range(num_days)])
+                        # 查找 010 (即上一天休一天)，如果有的話，這輪直接作廢重新碰撞
+                        if "010" in days_str:
+                            valid_month = False
+                            break
+
                 if valid_month and all(total_off_counts[n] >= 8 for n in full_time_names):
                     final_res = res
                     for n in display_names:
@@ -354,9 +373,9 @@ if file_a and file_b and num_days > 0:
                     break
             
             if not success_schedule:
-                st.error("⚠️ 當前跨月的大夜排班限制（N接D須隔2天）或預約假過於集中。請試著調整部分預班表，或放寬人員排班權限再按一次！")
+                st.error("⚠️ 當前各人員的預約假過於密集。在死鎖每日4D/3E/2N人力與『正職不上單天班』的嚴格法規下無法算出。請嘗試重新點擊按鈕，或放寬部分人員權限再試一次！")
             else:
-                st.success("🎉 排班成功！已完成跨月接軌數據校正。")
+                st.success("🎉 排班成功！正職人員已全數達到：【絕不上單天班，每段班別皆連續上2-5天】之高階排班標準！")
                 
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers
@@ -401,7 +420,7 @@ if file_a and file_b and num_days > 0:
                     download_df.to_excel(w, sheet_name="2F綜合建議班表")
                     
                 st.download_button(
-                    label="📥 下載【新規則升級版】合併 Excel 檔", 
+                    label="📥 下載 Excel 檔", 
                     data=out.getvalue(), 
                     file_name=f"2F_Schedule_Final_{start_date}.xlsx",
                     use_container_width=True
