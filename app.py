@@ -2,9 +2,13 @@ import streamlit as st
 import pandas as pd
 import random
 from io import BytesIO
+import datetime
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-每日人力絕對鎖死版", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統-日期自訂統計版", layout="wide")
+
+# 中文星期對照表
+WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
 # --- 1. 背景解析邏輯 ---
 def get_staff_configs(file):
@@ -101,13 +105,30 @@ def schedule_part_time(num_days):
 
 st.title("🏥 2F 護理排班系統")
 
+# --- 3. 側邊欄自訂日期設定 ---
 with st.sidebar:
-    st.header("📂 檔案上傳")
-    num_days = st.slider("本月天數", 28, 31, 31)
+    st.header("📂 檔案上傳與日期設定")
+    
+    # 讓使用者點擊日曆自由輸入排班起訖日
+    today = datetime.date.today()
+    start_date = st.date_input("排班開始日期", today.replace(day=1))
+    end_date = st.date_input("排班結束日期", today.replace(day=28) + datetime.timedelta(days=3))
+    
+    # 計算出實際排班天數與日期字串清單
+    if start_date <= end_date:
+        date_objects = [start_date + datetime.timedelta(days=x) for x in range((end_date - start_date).days + 1)]
+        num_days = len(date_objects)
+        # 轉換格式為 "5/1 (五)"
+        date_headers = [f"{d.month}/{d.day} ({WEEKDAYS_CHINESE[d.weekday()]})" for d in date_objects]
+        st.info(f"📅 本次排班共計：{num_days} 天")
+    else:
+        st.error("⚠️ 錯誤：結束日期不能早於開始日期！")
+        num_days = 0
+
     file_a = st.file_uploader("1. 上傳【班表】(檔案 A)", type=["xlsx"])
     file_b = st.file_uploader("2. 上傳【預班表】(檔案 B)", type=["xlsx"])
 
-if file_a and file_b:
+if file_a and file_b and num_days > 0:
     try:
         staff_configs = get_staff_configs(file_a)
         all_names = list(staff_configs.keys())
@@ -130,9 +151,9 @@ if file_a and file_b:
                         elif val in ["D", "E", "N"]: bg_vacation[n][d] = val
                     break
 
-        st.success(f"✅ 成功辨識 {len(display_names)} 位有效人員（已過濾雜訊）。")
+        st.success(f"✅ 成功辨識 {len(display_names)} 位有效人員（日期範圍已更新）。")
 
-        # --- 3. 專屬核對區代碼 ---
+        # --- 核對區 ---
         st.subheader("⚙️ 核對權限與銜接狀態")
         history_final, perm_final, cont_days_final = {}, {}, {}
         cols = st.columns(4)
@@ -150,14 +171,13 @@ if file_a and file_b:
         # --- 4. 啟動自動排班 ---
         st.markdown("---")
         if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
-            # 建立多重嘗試機制，直到跑出同時完美滿足「4D/3E/2N」與「全員>=8休」的班表為止
             success_schedule = False
             final_res = {}
             
             for attempt in range(500):
                 res = {n: [""] * num_days for n in display_names}
                 
-                # A. 先配半職
+                # A. 編排半職人員
                 for pt_name in part_time_names:
                     res[pt_name] = schedule_part_time(num_days)
 
@@ -176,7 +196,7 @@ if file_a and file_b:
                                 res[n][d] = "v"
                                 total_off_counts[n] += 1
 
-                # B. 每日排班主迴圈
+                # B. 正職人員排班主邏輯
                 valid_month = True
                 for d in range(num_days):
                     target = {"D": 4, "E": 3, "N": 2}
@@ -186,7 +206,7 @@ if file_a and file_b:
                     
                     pool = [n for n in full_time_names if res[n][d] not in ["off", "v"]]
                     
-                    # 每週至少一休強制檢查
+                    # 每週至少一休強制檢查（自訂日期版）
                     real_day = d + 1
                     current_week_start_idx = (d // 7) * 7
                     if real_day % 7 == 0:
@@ -207,13 +227,13 @@ if file_a and file_b:
                                 target[v] -= 1
                                 pool.remove(n)
                             else:
-                                valid_month = False # 預班與硬性人數衝突，此輪作廢
+                                valid_month = False
 
-                    # 公平動態權重排序（總休假少的人優先獲得放假機會）
+                    # 公平動態權重排序
                     random.shuffle(pool)
                     pool.sort(key=lambda x: total_off_counts[x], reverse=True)
 
-                    # 依序填滿 2N, 3E, 4D 的硬性人數需求
+                    # 依序填滿 2N, 3E, 4D
                     for shift in ["N", "E", "D"]:
                         qualified = [n for n in pool if shift in perm_final[n]]
                         for _ in range(max(0, target[shift])):
@@ -222,28 +242,25 @@ if file_a and file_b:
                                 res[chosen][d] = shift
                                 if chosen in pool: pool.remove(chosen)
                             else:
-                                # 無法滿足每日 4D/3E/2N 人力，此輪作廢
                                 valid_month = False 
                     
-                    # 剩下的人全部轉為休假
                     for n in pool:
                         res[n][d] = "off"
                         total_off_counts[n] += 1
                         
-                # 驗證此輪班表是否所有人休假皆 >= 8 天，且每日人數絕對達標
                 if valid_month and all(total_off_counts[n] >= 8 for n in full_time_names):
                     final_res = res
                     success_schedule = True
                     break
             
             if not success_schedule:
-                st.error("⚠️ 當前各人員的『請假天數過多』或『排班權限過窄』，在死鎖每日4D/3E/2N人力的限制下無法算出每人8休。請嘗試重新點擊按鈕，或放寬部分人員的排班權限再試一次！")
+                st.error("⚠️ 在死鎖每日4D/3E/2N人力的限制下無法算出每人8休。請嘗試重新排班或放寬權限。")
             else:
-                st.success("🎉 排班大成功！已完美鎖死【白班4人、小夜3人、大夜2人】，且全體正職總休假天數皆『大於或等於8天』並達到公平平均！")
+                st.success("🎉 排班大成功！已完美套用自訂日期範圍。")
                 
-                # 建立 DataFrame
+                # 建立 DataFrame 並套用自訂日期標頭 (例如 5/1 (五))
                 final_df = pd.DataFrame(final_res).T
-                final_df.columns = [i for i in range(1, num_days + 1)]
+                final_df.columns = date_headers
                 
                 # 橫向統計總天數
                 def count_off_days(row):
@@ -253,13 +270,13 @@ if file_a and file_b:
                 
                 # 縱向統計
                 stat_rows = {}
-                for d in range(1, num_days + 1):
-                    col_data = final_df[d]
+                for header in date_headers:
+                    col_data = final_df[header]
                     count_d = sum(1 for cell in col_data if str(cell).upper() == "D")
                     count_e = sum(1 for cell in col_data if str(cell).upper() == "E")
                     count_n = sum(1 for cell in col_data if str(cell).upper() == "N")
                     
-                    stat_rows[d] = {
+                    stat_rows[header] = {
                         "白班 (4人)": f"{count_d}人",
                         "小夜 (3人)": f"{count_e}人",
                         "大夜 (2人)": f"{count_n}人"
@@ -268,7 +285,7 @@ if file_a and file_b:
                 df_stats = pd.DataFrame(stat_rows).T
                 
                 # 顯示結果
-                st.subheader("🎉 最終排班結果（每日人力絕對鎖死模式）")
+                st.subheader("🎉 最終排班結果（自訂日期）")
                 st.dataframe(final_df, use_container_width=True)
                 
                 st.markdown("### 📊 每日各班別總人數核對")
@@ -279,7 +296,7 @@ if file_a and file_b:
                 with pd.ExcelWriter(out) as w: 
                     final_df.to_excel(w, sheet_name="建議班表")
                     df_stats.T.to_excel(w, sheet_name="每日人數統計")
-                st.download_button("📥 下載 Excel 結果", out.getvalue(), "Schedule_Final_Strict_Force.xlsx")
+                st.download_button("📥 下載 Excel 結果", out.getvalue(), f"Schedule_{start_date}_to_{end_date}.xlsx")
 
     except Exception as e:
         st.error(f"系統執行失敗: {e}")
