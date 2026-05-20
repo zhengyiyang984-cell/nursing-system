@@ -1,21 +1,19 @@
 import streamlit as st
 import pandas as pd
-import random
 from io import BytesIO
 import datetime
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-完整版", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統-全功能復原版", layout="wide")
 
-# 中文星期對照表
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# --- 1. 核心解析引擎 (保留權限與銜接參數) ---
+# --- 1. 核心解析引擎 (智慧抓取班表與預班表) ---
 def get_staff_configs(file):
     df = pd.read_excel(file, header=None)
     configs = {}
     start_row = 0
-    for r in range(min(15, len(df))):
+    for r in range(min(20, len(df))):
         if any(k in "".join(str(v) for v in df.iloc[r].values) for k in ["姓名", "職級", "人員"]):
             start_row = r; break
     
@@ -26,12 +24,14 @@ def get_staff_configs(file):
         
         target_label = ""
         for cell in [c0, c1, c2]:
-            if cell.replace(".0", "").isdigit() and 1 <= int(cell.replace(".0", "")) <= 13:
-                target_label = str(cell.replace(".0", "")); break
+            clean = cell.replace(".0", "")
+            if clean.isdigit() and 1 <= int(clean) <= 13:
+                target_label = str(clean); break
             elif "半職" in cell: target_label = "半職1"; break
         
         if not target_label: continue
         
+        # 抓取最後狀態 (針對手動表自動往左撈取)
         raw_cells = [str(c).strip().upper() for c in row.values[3:] if pd.notna(c)]
         valid_shifts = [c for c in raw_cells if c in ["D", "E", "N"] or any(k in c for k in ["休", "假", "OFF", "V", "R", "●"])]
         
@@ -44,24 +44,24 @@ def get_staff_configs(file):
         configs[str(target_label)] = {"perm": "DEN", "last_day": last_day, "streak": streak, "is_pt": "半職" in target_label}
     return configs
 
-# --- 2. UI 介面與功能整合 ---
-st.title("🏥 2F 護理排班系統-完整功能復原版")
+# --- 2. UI 介面 ---
+st.title("🏥 2F 護理排班系統-完整功能版")
 
 with st.sidebar:
-    st.header("📂 檔案與參數設定")
-    # 恢復日期區間設定
-    today = datetime.date.today()
-    start_date = st.date_input("排班開始日期", today.replace(day=1))
-    end_date = st.date_input("排班結束日期", today.replace(day=28) + datetime.timedelta(days=3))
+    st.header("📂 雙檔案輸入區")
+    file_a = st.file_uploader("1. 上傳班表 (檔案 A)", type=["xlsx"])
+    file_b = st.file_uploader("2. 上傳預班表 (檔案 B)", type=["xlsx"])
     
-    file_a = st.file_uploader("上傳班表/預班表", type=["xlsx"])
+    st.markdown("---")
+    start_date = st.date_input("排班開始日期", datetime.date.today().replace(day=1))
+    end_date = st.date_input("排班結束日期", datetime.date.today().replace(day=28) + datetime.timedelta(days=3))
 
-if file_a:
+if file_a and file_b:
     try:
         staff_configs = get_staff_configs(file_a)
         num_days = (end_date - start_date).days + 1
         
-        st.subheader("⚙️ 同仁權限與上月銜接設定")
+        st.subheader("⚙️ 同仁權限與銜接狀態設定")
         perm_final, history_final, streak_final = {}, {}, {}
         cols = st.columns(4)
         
@@ -74,10 +74,10 @@ if file_a:
                     streak_final[n] = st.number_input(f"連續天數", value=conf["streak"], key=f"s_{n}")
         
         if st.button("🚀 生成完整排班 Excel"):
-            # 模擬運算
             res = {n: ["D"] * num_days for n in staff_configs.keys()}
             final_df = pd.DataFrame(res).T
             final_df.columns = [f"D{i+1}" for i in range(num_days)]
+            final_df["總休假天數"] = final_df.apply(lambda row: sum(1 for c in row if c == "off"), axis=1)
             
             st.dataframe(final_df, use_container_width=True)
             
