@@ -5,7 +5,7 @@ from io import BytesIO
 import datetime
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-接軌完全體", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統", layout="wide")
 
 # 中文星期對照表
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
@@ -167,7 +167,7 @@ def schedule_part_time(num_days):
         if idx < num_days: backup_days[idx] = "D"
     return backup_days
 
-st.title("🏥 2F 護理排班系統 (智慧衝關完全體)")
+st.title("🏥 2F 護理排班系統")
 
 with st.sidebar:
     st.header("📂 檔案上傳與日期設定")
@@ -184,8 +184,8 @@ with st.sidebar:
         st.error("⚠️ 錯誤：結束日期不能早於開始日期！")
         num_days = 0
 
-    file_a = st.file_uploader("1. 上傳【班表】(檔案 A - 支援直接投入上月結果/手動預班表)", type=["xlsx"])
-    file_b = st.file_uploader("2. 上傳【預班表】(檔案 B)", type=["xlsx"])
+    file_a = st.file_uploader("1. 上傳【班表】", type=["xlsx"])
+    file_b = st.file_uploader("2. 上傳【預班表】", type=["xlsx"])
 
 if file_a and file_b and num_days > 0:
     try:
@@ -208,7 +208,7 @@ if file_a and file_b and num_days > 0:
                         elif val in ["D", "E", "N"]: bg_vacation[n][d] = val
                     break
 
-        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員（跨月數據鏈已完全就緒）。")
+        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員。")
 
         st.subheader("⚙️ 核對權限與銜接狀態")
         history_final, perm_final, cont_days_final = {}, {}, {}
@@ -217,7 +217,7 @@ if file_a and file_b and num_days > 0:
         for i, n in enumerate(display_names):
             with cols[i % 4]:
                 with st.container(border=True):
-                    st.markdown(f"🔢 **人員序號：{n}**")
+                    st.markdown(f" **人員序號：{n}**")
                     raw_perm = st.text_input(f"權限", value=staff_configs[n]["perm"], key=f"p_{n}")
                     perm_final[n] = raw_perm.strip().upper().replace(",", "").replace(" ", "")
                     if not perm_final[n]: perm_final[n] = "DEN"
@@ -228,7 +228,7 @@ if file_a and file_b and num_days > 0:
                     cont_days_final[n] = st.number_input(f"連續天數", 0, 6, int(staff_configs[n]["streak"]), key=f"c_{n}")
 
         st.markdown("---")
-        if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
+        if st.button(" 啟動自動排班", type="primary", use_container_width=True):
             success_schedule = False
             final_res = {}
             next_month_history_row = {}
