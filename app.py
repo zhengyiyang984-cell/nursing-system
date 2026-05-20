@@ -153,7 +153,7 @@ def schedule_part_time(num_days):
         if idx < num_days: backup_days[idx] = "D"
     return backup_days
 
-st.title("🏥 2F 護理排班系統 ")
+st.title("🏥 2F 護理排班系統")
 
 # --- 3. 側邊欄日期與檔案設定 ---
 with st.sidebar:
@@ -226,6 +226,7 @@ if file_a and file_b and num_days > 0:
             next_month_streak_row = {}
             
             for attempt in range(500):
+                # 【核心修復點 1】valid_month 的最高起點必須死死鎖在 attempt 迴圈的最頂端
                 valid_month = True
                 
                 res = {n: [""] * num_days for n in display_names}
@@ -235,7 +236,7 @@ if file_a and file_b and num_days > 0:
                 total_off_counts = {n: 0 for n in full_time_names}
                 streak_tracker = {n: int(cont_days_final[n]) for n in full_time_names}
                 
-                # --- 大夜班（N）跨月預約隔斷處理 ---
+                # --- 大夜班（N）跨月預約隔斷處理（短路保護鎖） ---
                 for n in full_time_names:
                     if history_final[n] == "N":
                         if num_days > 0 and bg_vacation[n][0] == "D": valid_month = False
@@ -245,7 +246,8 @@ if file_a and file_b and num_days > 0:
                     continue
 
                 for d in range(num_days):
-                    if not valid_month: break
+                    if not valid_month: 
+                        break
                     
                     target = {"D": 4, "E": 3, "N": 2}
                     for pt_name in part_time_names:
@@ -265,9 +267,7 @@ if file_a and file_b and num_days > 0:
                             total_off_counts[n] += 1
                             if n in pool: pool.remove(n)
 
-                    # 【全新正職防呆：阻斷單天班 (不上單天班)】
-                    # 如果「昨天是休假」且「今天如果是 pool 裡唯一可能被排的人，但明天卻又是被指定的休假/預約假」，代表今天上了就會變單天班
-                    # 我們提前讓他在今天也強制放假，直接融合成連休
+                    # 阻斷單天班 (不上單天班)
                     for n in pool.copy():
                         prev_is_off = (res[n][d-1] in ["off", "v", "R"]) if d > 0 else (history_final[n] in ["off", "v", "R"])
                         next_is_off = (bg_vacation[n][d+1] == "R") if d < (num_days - 1) else False
@@ -308,7 +308,8 @@ if file_a and file_b and num_days > 0:
                             else:
                                 valid_month = False
 
-                    if not valid_month: break
+                    if not valid_month: 
+                        break
 
                     # 動態融斷
                     needed_slots = sum(max(0, target[s]) for s in ["N", "E", "D"])
@@ -322,7 +323,7 @@ if file_a and file_b and num_days > 0:
                     random.shuffle(pool)
                     pool.sort(key=lambda x: total_off_counts[x], reverse=True)
 
-                    # 系統自動分派班別 (加入單天班雙向判定)
+                    # 系統自動分派班別
                     for shift in ["N", "E", "D"]:
                         qualified = []
                         for n in pool:
@@ -330,7 +331,6 @@ if file_a and file_b and num_days > 0:
                                 prev_1 = res[n][d-1] if d > 0 else history_final[n]
                                 prev_2 = res[n][d-2] if d > 1 else "off"
                                 
-                                # 抽白班資格過濾
                                 if shift == "D" and (prev_1 == "N" or prev_2 == "N"): continue
                                 if shift == "D" and prev_1 == "E": continue
                                     
@@ -343,18 +343,15 @@ if file_a and file_b and num_days > 0:
                                 streak_tracker[chosen] += 1
                                 if chosen in pool: pool.remove(chosen)
                     
-                    # 剩下沒分到班的人轉休假
                     for n in pool:
                         res[n][d] = "off"
                         total_off_counts[n] += 1
                         
-                # 最終合法性大檢驗：強力卡死正職絕對沒有「上一休一 (1連班)」
+                # 【核心修復點 2】將最終單天班大檢驗移到每日排班結束後，若不通過則果斷重新碰撞
                 if valid_month:
                     for n in full_time_names:
-                        # 將員工一個月的所有班別轉成 1(上班) 和 0(休假)
                         days_str = "".join(["0" if res[n][x] in ["off", "v", "R"] else "1" for x in range(num_days)])
-                        # 查找 010 (即上一天休一天)，如果有的話，這輪直接作廢重新碰撞
-                        if "010" in days_str:
+                        if "010" in days_str or days_str.startswith("10") or days_str.endswith("01"):
                             valid_month = False
                             break
 
@@ -373,9 +370,9 @@ if file_a and file_b and num_days > 0:
                     break
             
             if not success_schedule:
-                st.error("⚠️ 當前各人員的預約假過於密集。在死鎖每日4D/3E/2N人力與『正職不上單天班』的嚴格法規下無法算出。請嘗試重新點擊按鈕，或放寬部分人員權限再試一次！")
+                st.error("⚠️ 當前各人員的預約假過於密集。在鎖定4D/3E/2N人力與『正職不上單天班』的法規限制下本輪未能配出。請重試或微調預班表再按一次！")
             else:
-                st.success("🎉 排班成功！正職人員已全數達到：【絕不上單天班，每段班別皆連續上2-5天】之高階排班標準！")
+                st.success("🎉 排班大成功！已通過所有防呆安全規範（無花班、不上單天班、大夜隔開2天）。")
                 
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers
@@ -420,7 +417,7 @@ if file_a and file_b and num_days > 0:
                     download_df.to_excel(w, sheet_name="2F綜合建議班表")
                     
                 st.download_button(
-                    label="📥 下載 Excel 檔", 
+                    label="📥 下載【高階連班優化版】合併 Excel 檔", 
                     data=out.getvalue(), 
                     file_name=f"2F_Schedule_Final_{start_date}.xlsx",
                     use_container_width=True
