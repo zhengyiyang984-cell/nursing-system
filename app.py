@@ -153,7 +153,7 @@ def schedule_part_time(num_days):
         if idx < num_days: backup_days[idx] = "D"
     return backup_days
 
-st.title("🏥 2F 護理排班系統 (終極完全體)")
+st.title("🏥 2F 護理排班系統 (終極金盾完美版)")
 
 # --- 3. 側邊欄日期與檔案設定 ---
 with st.sidebar:
@@ -222,6 +222,8 @@ if file_a and file_b and num_days > 0:
         if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
             success_schedule = False
             final_res = {}
+            next_month_history_row = {}
+            next_month_streak_row = {}
             
             for attempt in range(500):
                 valid_month = True
@@ -233,7 +235,7 @@ if file_a and file_b and num_days > 0:
                 total_off_counts = {str(n): 0 for n in full_time_names}
                 streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
                 
-                # --- 大夜班（N）跨月預約隔斷處理 ---
+                # --- 大夜班（N）跨月預約隔斷處理（短路保護） ---
                 for n in full_time_names:
                     if history_final[n] == "N":
                         if num_days > 0 and bg_vacation[n][0] == "D": valid_month = False
@@ -350,24 +352,18 @@ if file_a and file_b and num_days > 0:
                             valid_month = False
                             break
 
-                # 數據橫向打包
+                # 提取成功數據
                 if valid_month and all(total_off_counts[n] >= 8 for n in full_time_names):
+                    final_res = {str(k): v for k, v in res.items()}
                     for n in display_names:
-                        last_shift_val = res[n][-1]
+                        next_month_history_row[str(n)] = res[n][-1]
                         s_count = 0
                         for cell_b in reversed(res[n]):
                             if cell_b in ["D", "E", "N"]: s_count += 1
                             else: break
                         if s_count == num_days and res[n][0] in ["D", "E", "N"]:
                             s_count += int(cont_days_final[n])
-                        
-                        off_days_count = sum(1 for cell in res[n] if str(cell).lower() in ["off", "v", "r"])
-                        
-                        res[n].append(off_days_count)          
-                        res[n].append(last_shift_val)         
-                        res[n].append(s_count)                
-                        
-                    final_res = res
+                        next_month_streak_row[str(n)] = s_count
                     success_schedule = True
                     break
             
@@ -376,11 +372,21 @@ if file_a and file_b and num_days > 0:
             else:
                 st.success("🎉 排班大成功！已通過所有防呆安全規範（無碎班、不上單天班、大夜隔開2天）。")
                 
-                # 建立完整的標頭清單
-                extended_headers = date_headers + ["總休假天數", "系統接續_最後班別", "系統接續_連續天數"]
+                # 【終極對齊防線 1】先用最純粹的常規天數（如 31 天）建立乾淨的 DataFrame
+                final_df = pd.DataFrame.from_dict(final_res, orient='index', columns=date_headers)
                 
-                # 【終極對齊核心】在建立 DataFrame 的瞬間直接強制指定 columns 寬度！
-                final_df = pd.DataFrame.from_dict(final_res, orient='index', columns=extended_headers)
+                # 【終極對齊防線 2】強制將表格索引與名單陣列全部同化為純字串，全面降維打擊型態地雷！
+                final_df.index = final_df.index.astype(str)
+                str_display_names = [str(n) for n in display_names]
+                
+                # 計算總休假天數
+                def count_off_days(row):
+                    return sum(1 for cell in row if str(cell).lower() in ["off", "v", "r"])
+                
+                # 【完美橫向追加】直接使用 Pandas 官方最高效、最不易衝突的方式追加這三個接續直欄！
+                final_df["總休假天數"] = final_df.apply(count_off_days, axis=1)
+                final_df["系統接續_最後班別"] = [next_month_history_row[n] for n in str_display_names]
+                final_df["系統接續_連續天數"] = [next_month_streak_row[n] for n in str_display_names]
                 
                 # 縱向統計
                 stat_rows = {}
