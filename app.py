@@ -155,7 +155,7 @@ with st.sidebar:
     if start_date <= end_date:
         date_objects = [start_date + datetime.timedelta(days=x) for x in range((end_date - start_date).days + 1)]
         num_days = len(date_objects)
-        date_headers = [f"{d.month}/{d.day} ({WEEKDAYS_CHIZE = WEEKDAYS_CHINESE[d.weekday()] if 'WEEKDAYS_CHINESE' in globals() else ['一','二','三','四','五','六','日'][d.weekday()]})" for d in date_objects]
+        # 【完美精準修復】已徹底刪除殘留測試髒行，保持最乾淨的標準日期標頭格式
         date_headers = [f"{d.month}/{d.day} ({WEEKDAYS_CHINESE[d.weekday()]})" for d in date_objects]
         st.info(f"📅 本次排班共計：{num_days} 天")
     else:
@@ -221,7 +221,6 @@ if file_a and file_b and num_days > 0:
                 total_off_counts = {str(n): 0 for n in full_time_names}
                 streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
                 
-                # --- 大夜班（N）跨月預約隔斷處理 ---
                 for n in full_time_names:
                     if history_final[n] == "N":
                         if num_days > 0 and bg_vacation[n][0] == "D": valid_month = False
@@ -251,8 +250,7 @@ if file_a and file_b and num_days > 0:
                             total_off_counts[n] += 1
                             if n in pool: pool.remove(n)
 
-                    # 【全新修復：全視角即時碎班防禦雷達】
-                    # 在前 500 次高強度撞擊中，只要發現今天上了班，明天高機率會被強迫變休假，今天提前主動休假阻斷 010
+                    # 全視角即時碎班阻斷防線
                     if attempt < 500:
                         for n in pool.copy():
                             prev_is_off = (res[n][d-1] in ["off", "v", "R"]) if d > 0 else (history_final[n] in ["off", "v", "R"])
@@ -332,12 +330,10 @@ if file_a and file_b and num_days > 0:
                         res[n][d] = "off"
                         total_off_counts[n] += 1
                         
-                # 【終極強力檢驗網：雙向字串地毯式查殺】
-                # 在前 500 次排班嘗試中，只要任何一位正職員工的最終全月班表中出現了單天班（010、開頭10、結尾01），直接整回合抹殺重洗！
+                # 最終單天班字串大抽查
                 if valid_month and attempt < 500:
                     for n in full_time_names:
                         days_str = "".join(["0" if res[n][x] in ["off", "v", "R"] else "1" for x in range(num_days)])
-                        # 徹底查殺 010 (上一休一), 10 (第一天排單天), 01 (最後一天排單天)
                         if "010" in days_str or days_str.startswith("10") or days_str.endswith("01"):
                             valid_month = False
                             break
@@ -361,6 +357,7 @@ if file_a and file_b and num_days > 0:
             else:
                 st.success("🎉 排班大成功！已通過所有防呆安全規範（全月無碎班、不上單天班、大夜隔開2天）。")
                 
+                # 標準二維翻轉建立 DataFrame
                 final_df = pd.DataFrame(final_res) 
                 final_df = final_df.T              
                 final_df.columns = date_headers    
@@ -371,10 +368,12 @@ if file_a and file_b and num_days > 0:
                 def count_off_days(row):
                     return sum(1 for cell in row if str(cell).lower() in ["off", "v", "r"])
                 
+                # 橫向追加統計新直欄
                 final_df["總休假天數"] = final_df.apply(count_off_days, axis=1)
                 final_df["系統接續_最後班別"] = [next_month_history_row[n] for n in str_display_names]
                 final_df["系統接續_連續天數"] = [next_month_streak_row[n] for n in str_display_names]
                 
+                # 縱向統計（人數核對）
                 stat_rows = {}
                 for header in date_headers:
                     col_data = final_df[header]
@@ -387,6 +386,7 @@ if file_a and file_b and num_days > 0:
                 st.subheader("🎉 最終排班結果")
                 st.dataframe(final_df, use_container_width=True)
                 
+                # 補滿延伸報表的右側空白欄位
                 df_stats_extended = df_stats.copy()
                 df_stats_extended["總休假天數"] = ""
                 df_stats_extended["系統接續_最後班別"] = ""
