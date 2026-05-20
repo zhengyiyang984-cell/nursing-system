@@ -159,6 +159,167 @@ st.title("🏥 2F 護理排班系統")
 with st.sidebar:
     st.header("📂 檔案上傳與日期設定")
     
+    today = datetime.date.today()import streamlit as st
+import pandas as pd
+import random
+from io import BytesIO
+import datetime
+import re
+
+st.set_page_config(page_title="2F 護理排班系統-接軌完全體", layout="wide")
+
+# 中文星期對照表
+WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
+
+# --- 1. 背景解析與格式防呆（地毯式無條件白名單掃描，保證 100% 抓全所有人） ---
+def get_staff_configs(file):
+    df = pd.read_excel(file, header=None)
+    configs = {}
+    
+    # 定位包含「姓名」或「職級」的標頭起始行
+    start_row = 0
+    for r in range(min(15, len(df))):
+        row_str = "".join(str(v) for v in df.iloc[r].values)
+        if "姓名" in row_str or "職級" in row_str:
+            start_row = r
+            break
+
+    headers_row = df.iloc[start_row].tolist()
+    
+    # 自動尋找橫向架構中埋在右側的接續資料欄位 index
+    hist_col_idx = -1
+    streak_col_idx = -1
+    for idx, h in enumerate(headers_row):
+        h_str = str(h).strip()
+        if "系統接續_最後班別" in h_str: hist_col_idx = idx
+        if "系統接續_連續天數" in h_str: streak_col_idx = idx
+
+    # 逐列讀取人員名單
+    for i in range(start_row + 1, len(df)):
+        row = df.iloc[i]
+        if len(row) < 3: continue
+        
+        # 抓取前三個欄位文字進行大數據掃描
+        c0 = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+        c1 = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
+        c2 = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
+        
+        # 【強力過濾防線 1】只要這一行含有任何總人數核對的統計中文字，當場整行丟棄！
+        combined_text = f"{c0}{c1}{c2}"
+        if any(k in combined_text for k in ["---", "每日人力", "總人數", "核對", "白班", "小夜", "大夜", "下月接續", "統計"]):
+            continue
+        if "星期" in combined_text or "姓名" in combined_text:
+            continue
+
+        # 【地毯式白名單判定】只要前三欄裡面有任何一格是 1~13 的數字，或者寫著「半職」，他就是我們要的人！
+        is_valid_staff = False
+        target_label = ""
+        staff_name = ""
+        
+        for cell_val in [c0, c1, c2]:
+            clean_cell = cell_val.replace(".0", "")
+            if clean_cell.isdigit() and 1 <= int(clean_cell) <= 13:
+                is_valid_staff = True
+                target_label = clean_cell
+                break
+            elif "半職" in cell_val:
+                is_valid_staff = True
+                target_label = "半職1"
+                break
+                
+        if not is_valid_staff:
+            continue
+
+        for cell_val in [c2, c1, c0]:
+            if cell_val and not cell_val.replace(".0", "").isdigit() and "半職" not in cell_val and cell_val != "nan":
+                staff_name = cell_val
+                break
+        if not staff_name: staff_name = target_label
+
+        display_label = target_label
+        is_pt = "半職" in display_label
+        
+        # 權限相容防呆
+        pure_perm = "DEN"
+        for p_check in [c0, c1]:
+            p_check_upper = p_check.upper()
+            if any(s in p_check_upper for s in ["D", "E", "N"]) and not p_check.replace(".0", "").isdigit():
+                pure_perm = p_check_upper
+                break
+
+        # 3. 決定銜接狀態與連續上班天數
+        last_day = "off"
+        loaded_streak = 0
+
+        if hist_col_idx != -1 and hist_col_idx < len(row) and pd.notna(row.iloc[hist_col_idx]):
+            last_day = str(row.iloc[hist_col_idx]).strip()
+        if streak_col_idx != -1 and streak_col_idx < len(row) and pd.notna(row.iloc[streak_col_idx]):
+            try: loaded_streak = int(float(row.iloc[streak_col_idx]))
+            except: loaded_streak = 0
+            
+        if last_day == "off" and loaded_streak == 0:
+            valid_cells = [str(c).strip().upper() for c in row.values[3:] if pd.notna(c) and str(c).strip().upper() in ["D", "E", "N", "OFF", "V", "R"]]
+            if valid_cells:
+                pure_shifts = [c for c in valid_cells if c in ["D", "E", "N", "OFF", "V", "R"] and not c.isdigit()][:31]
+                if pure_shifts:
+                    last_c = pure_shifts[-1]
+                    last_day = last_c if last_c in ["D", "E", "N", "R"] else last_c.lower()
+                    
+                    s_count = 0
+                    for cell_val in reversed(pure_shifts):
+                        if cell_val in ["D", "E", "N"]: s_count += 1
+                        else: break
+                    loaded_streak = s_count
+
+        if last_day not in ["D", "E", "N", "off", "v", "R"]: last_day = "off"
+        pure_id = re.sub(r'[\s\u3000]', '', staff_name)
+
+        configs[display_label] = {
+            "pure_id": pure_id,
+            "perm": pure_perm,
+            "last_day": last_day,
+            "streak": loaded_streak,
+            "is_part_time": is_pt
+        }
+    return configs
+
+# --- 2. 半職專用排班演算 ---
+def schedule_part_time(num_days):
+    for _ in range(100):
+        days = ["off"] * num_days
+        available_patterns = [[2, 2, 2, 2, 2], [3, 3, 2, 2], [3, 2, 3, 2], [2, 3, 2, 3], [2, 2, 3, 3]]
+        work_blocks = random.choice(available_patterns)
+        random.shuffle(work_blocks) 
+        
+        current_idx = random.randint(0, 2) 
+        success = True
+        
+        for block in work_blocks:
+            if current_idx + block > num_days:
+                success = False
+                break
+            for _ in range(block):
+                if current_idx < num_days:
+                    days[current_idx] = "D"
+                    current_idx += 1
+            current_idx += random.randint(2, 4)
+            
+        if success and days.count("D") == 10:
+            days_str = "".join(["1" if d == "D" else "0" for d in days])
+            if "1111" not in days_str and "010" not in days_str and not days_str.startswith("10") and not days_str.endswith("01"):
+                return days
+                
+    backup_days = ["off"] * num_days
+    for idx in [2, 3, 4, 9, 10, 15, 16, 17, 22, 23]:
+        if idx < num_days: backup_days[idx] = "D"
+    return backup_days
+
+st.title("🏥 2F 護理排班系統 (最終防錯解鎖版)")
+
+# --- 3. 側邊欄日期與檔案設定 ---
+with st.sidebar:
+    st.header("📂 檔案上傳與日期設定")
+    
     today = datetime.date.today()
     start_date = st.date_input("排班開始日期", today.replace(day=1))
     end_date = st.date_input("排班結束日期", today.replace(day=28) + datetime.timedelta(days=3))
@@ -172,8 +333,8 @@ with st.sidebar:
         st.error("⚠️ 錯誤：結束日期不能早於開始日期！")
         num_days = 0
 
-    file_a = st.file_uploader("1. 上傳【班表】", type=["xlsx"])
-    file_b = st.file_uploader("2. 上傳【預班表】", type=["xlsx"])
+    file_a = st.file_uploader("1. 上傳【班表】(檔案 A - 支援直接投入上月結果)", type=["xlsx"])
+    file_b = st.file_uploader("2. 上傳【預班表】(檔案 B)", type=["xlsx"])
 
 if file_a and file_b and num_days > 0:
     try:
@@ -197,7 +358,7 @@ if file_a and file_b and num_days > 0:
                         elif val in ["D", "E", "N"]: bg_vacation[n][d] = val
                     break
 
-        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員。")
+        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員（跨月數據鏈已完全就緒）。")
 
         # --- 核對區 ---
         st.subheader("⚙️ 核對權限與銜接狀態")
@@ -226,7 +387,7 @@ if file_a and file_b and num_days > 0:
             next_month_streak_row = {}
             
             for attempt in range(500):
-                # 【核心修復點 1】valid_month 的最高起點必須死死鎖在 attempt 迴圈的最頂端
+                # 每回合初始化
                 valid_month = True
                 
                 res = {n: [""] * num_days for n in display_names}
@@ -236,7 +397,7 @@ if file_a and file_b and num_days > 0:
                 total_off_counts = {n: 0 for n in full_time_names}
                 streak_tracker = {n: int(cont_days_final[n]) for n in full_time_names}
                 
-                # --- 大夜班（N）跨月預約隔斷處理（短路保護鎖） ---
+                # --- 大夜班（N）跨月預約隔斷處理（短路保護） ---
                 for n in full_time_names:
                     if history_final[n] == "N":
                         if num_days > 0 and bg_vacation[n][0] == "D": valid_month = False
@@ -246,8 +407,7 @@ if file_a and file_b and num_days > 0:
                     continue
 
                 for d in range(num_days):
-                    if not valid_month: 
-                        break
+                    if not valid_month: break
                     
                     target = {"D": 4, "E": 3, "N": 2}
                     for pt_name in part_time_names:
@@ -260,7 +420,7 @@ if file_a and file_b and num_days > 0:
                             if res[n][d-1] in ["off", "v", "R"]:
                                 streak_tracker[n] = 0
 
-                    # 5連班過勞防呆
+                    # 5連班防呆
                     for n in pool.copy():
                         if streak_tracker[n] >= 5: 
                             res[n][d] = "off"
@@ -308,8 +468,7 @@ if file_a and file_b and num_days > 0:
                             else:
                                 valid_month = False
 
-                    if not valid_month: 
-                        break
+                    if not valid_month: break
 
                     # 動態融斷
                     needed_slots = sum(max(0, target[s]) for s in ["N", "E", "D"])
@@ -347,7 +506,7 @@ if file_a and file_b and num_days > 0:
                         res[n][d] = "off"
                         total_off_counts[n] += 1
                         
-                # 【核心修復點 2】將最終單天班大檢驗移到每日排班結束後，若不通過則果斷重新碰撞
+                # 最終單天班大檢驗
                 if valid_month:
                     for n in full_time_names:
                         days_str = "".join(["0" if res[n][x] in ["off", "v", "R"] else "1" for x in range(num_days)])
@@ -355,6 +514,7 @@ if file_a and file_b and num_days > 0:
                             valid_month = False
                             break
 
+                # 【精準修復點】只有在 valid_month 完全全過（True）時，才准許將排班資料寫入 final_res
                 if valid_month and all(total_off_counts[n] >= 8 for n in full_time_names):
                     final_res = res
                     for n in display_names:
@@ -369,10 +529,11 @@ if file_a and file_b and num_days > 0:
                     success_schedule = True
                     break
             
-            if not success_schedule:
-                st.error("⚠️ 當前各人員的預約假過於密集。在鎖定4D/3E/2N人力與『正職不上單天班』的法規限制下本輪未能配出。請重試或微調預班表再按一次！")
+            # 退出 500 次迴圈後的保底提示防線
+            if not success_schedule or not final_res:
+                st.error("⚠️ 當前各人員的預約假過於密集。在死鎖每日4D/3E/2N人力與『正職不上單天班』的法規限制下本輪未能配出。請再次點擊按鈕重試，或微調預班表再按一次！")
             else:
-                st.success("🎉 排班大成功！已通過所有防呆安全規範（無花班、不上單天班、大夜隔開2天）。")
+                st.success("🎉 排班大成功！已通過所有防呆安全規範（無碎班、不上單天班、大夜隔開2天）。")
                 
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers
