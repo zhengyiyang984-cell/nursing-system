@@ -432,3 +432,30 @@ if file_a and file_b and num_days > 0:
 
     except Exception as e:
         st.error(f"系統解析錯誤: {e}")
+# --- 在程式碼的最底端加入以下模組，用於輸出完整 Excel ---
+
+def export_to_excel(df, filename="Schedule_Complete.xlsx"):
+    """
+    此函式接收排班後的 DataFrame 並轉為 Excel 供下載
+    """
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name="排班結果")
+    return output.getvalue()
+
+# --- 檢測是否已經排班完成，若完成則顯示下載按鈕 ---
+# 請將這段檢查邏輯接在你的 'if st.button("🚀 啟動自動排班"):' 區塊結束之後
+if 'final_res' in locals() and final_res:
+    st.markdown("---")
+    st.subheader("📥 完整排班結果輸出")
+    
+    # 這裡假設你的結果已經整理為 final_df
+    excel_data = export_to_excel(final_df)
+    
+    st.download_button(
+        label="📥 下載完整 Excel 班表",
+        data=excel_data,
+        file_name="Schedule_Complete.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    st.balloons()
