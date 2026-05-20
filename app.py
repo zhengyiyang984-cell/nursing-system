@@ -25,7 +25,7 @@ def get_staff_configs(file):
 
     headers_row = df.iloc[start_row].tolist()
     
-    # 自動尋找橫向架構中埋在右側的接續資料欄位 index
+    # 自動尋找橫向架觀中埋在右側的接續資料欄位 index
     hist_col_idx = -1
     streak_col_idx = -1
     for idx, h in enumerate(headers_row):
@@ -222,6 +222,8 @@ if file_a and file_b and num_days > 0:
         if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
             success_schedule = False
             final_res = {}
+            next_month_history_row = {}
+            next_month_streak_row = {}
             
             for attempt in range(500):
                 # 每個回合開始，重置融斷旗標
@@ -234,13 +236,12 @@ if file_a and file_b and num_days > 0:
                 total_off_counts = {n: 0 for n in full_time_names}
                 streak_tracker = {n: int(cont_days_final[n]) for n in full_time_names}
                 
-                # --- 大夜班（N）跨月預約隔斷處理（新增：融斷安全鎖保護） ---
+                # --- 大夜班（N）跨月預約隔斷處理（短路防護鎖） ---
                 for n in full_time_names:
                     if history_final[n] == "N":
                         if num_days > 0 and bg_vacation[n][0] == "D": valid_month = False
                         if num_days > 1 and bg_vacation[n][1] == "D": valid_month = False
                 
-                # 如果跨月預約就已經衝突，直接跳出當次回合，進下一次嘗試，避免向下執行產生 UnboundLocalError
                 if not valid_month:
                     continue
 
@@ -337,13 +338,11 @@ if file_a and file_b and num_days > 0:
                         res[n][d] = "off"
                         total_off_counts[n] += 1
                         
+                # 只有在完全沒有被融斷、且每人總休假符合 >= 8 天時，才判定為成功並抓取接續欄位
                 if valid_month and all(total_off_counts[n] >= 8 for n in full_time_names):
                     final_res = res
-                    next_month_history_row = {}
-                    next_month_streak_row = {}
                     for n in display_names:
                         next_month_history_row[n] = res[n][-1]
-                        
                         s_count = 0
                         for cell_b in reversed(res[n]):
                             if cell_b in ["D", "E", "N"]: s_count += 1
@@ -351,14 +350,13 @@ if file_a and file_b and num_days > 0:
                         if s_count == num_days and res[n][0] in ["D", "E", "N"]:
                             s_count += int(cont_days_final[n])
                         next_month_streak_row[n] = s_count
-
                     success_schedule = True
                     break
             
             if not success_schedule:
-                st.error("⚠️ 人力鎖定或大夜排班間隔過窄（大夜接白班須隔2天）。請試著調整部分預班表，或重新點擊啟動排班！")
+                st.error("⚠️ 當前跨月的大夜排班限制（N接D須隔2天）或預約假過於集中。請試著調整部分預班表，或放寬人員排班權限再按一次！")
             else:
-                st.success("🎉 排班成功！已通過【大夜接白班中間強制休息2天】之最新安全規範檢驗！")
+                st.success("🎉 排班成功！已完成跨月接軌數據校正。")
                 
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers
