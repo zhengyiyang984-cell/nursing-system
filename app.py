@@ -212,6 +212,7 @@ if file_a and file_b and num_days > 0:
             next_month_streak_row = {}
             
             for attempt in range(1500):
+                # 【終極修正點】valid_month 的起步定義必須強制拉到最頂端，在迴圈一開跑就完成宣告！
                 valid_month = True
                 
                 res = {str(n): [""] * num_days for n in display_names}
@@ -221,6 +222,7 @@ if file_a and file_b and num_days > 0:
                 total_off_counts = {str(n): 0 for n in full_time_names}
                 streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
                 
+                # --- 大夜班（N）跨月預約隔斷處理 ---
                 for n in full_time_names:
                     if history_final[n] == "N":
                         if num_days > 0 and bg_vacation[n][0] == "D": valid_month = False
@@ -249,7 +251,6 @@ if file_a and file_b and num_days > 0:
                             total_off_counts[n] += 1
                             if n in pool: pool.remove(n)
 
-                    # 【精準修復行】將語法錯誤的 && 改成 Python 官方認證的 and，大功告成！
                     for n in pool.copy():
                         prev_is_off = (res[n][d-1] in ["off", "v", "R"]) if d > 0 else (history_final[n] in ["off", "v", "R"])
                         next_is_off = (bg_vacation[n][d+1] == "R") if d < (num_days - 1) else False
@@ -350,6 +351,7 @@ if file_a and file_b and num_days > 0:
             else:
                 st.success("🎉 排班大成功！已通過所有防呆安全規範（無碎班、不上單天班、大夜隔開2天）。")
                 
+                # 標準二維翻轉建立 DataFrame
                 final_df = pd.DataFrame(final_res) 
                 final_df = final_df.T              
                 final_df.columns = date_headers    
@@ -360,10 +362,12 @@ if file_a and file_b and num_days > 0:
                 def count_off_days(row):
                     return sum(1 for cell in row if str(cell).lower() in ["off", "v", "r"])
                 
+                # 橫向追加統計新直欄
                 final_df["總休假天數"] = final_df.apply(count_off_days, axis=1)
                 final_df["系統接續_最後班別"] = [next_month_history_row[n] for n in str_display_names]
                 final_df["系統接續_連續天數"] = [next_month_streak_row[n] for n in str_display_names]
                 
+                # 縱向統計（人數核對）
                 stat_rows = {}
                 for header in date_headers:
                     col_data = final_df[header]
@@ -376,6 +380,7 @@ if file_a and file_b and num_days > 0:
                 st.subheader("🎉 最終排班結果")
                 st.dataframe(final_df, use_container_width=True)
                 
+                # 補滿延伸報表的右側空白欄位
                 df_stats_extended = df_stats.copy()
                 df_stats_extended["總休假天數"] = ""
                 df_stats_extended["系統接續_最後班別"] = ""
