@@ -5,7 +5,7 @@ from io import BytesIO
 import datetime
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-接軌完全體", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統", layout="wide")
 
 # 中文星期對照表
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
@@ -158,7 +158,7 @@ def schedule_part_time(num_days):
         if idx < num_days: backup_days[idx] = "D"
     return backup_days
 
-st.title("🏥 2F 護理排班系統 (跨月接軌完全體)")
+st.title("🏥 2F 護理排班系統")
 
 # --- 3. 側邊欄日期與檔案設定 ---
 with st.sidebar:
@@ -177,8 +177,8 @@ with st.sidebar:
         st.error("⚠️ 錯誤：結束日期不能早於開始日期！")
         num_days = 0
 
-    file_a = st.file_uploader("1. 上傳【班表】(檔案 A - 支援直接投入上月結果)", type=["xlsx"])
-    file_b = st.file_uploader("2. 上傳【預班表】(檔案 B)", type=["xlsx"])
+    file_a = st.file_uploader("1. 上傳【班表】", type=["xlsx"])
+    file_b = st.file_uploader("2. 上傳【預班表】", type=["xlsx"])
 
 if file_a and file_b and num_days > 0:
     try:
@@ -206,7 +206,7 @@ if file_a and file_b and num_days > 0:
         st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員（100% 完整抓全，且已自動排除底部統計雜訊）。")
 
         # --- 核對區 ---
-        st.subheader("⚙️ 核對權限與銜接狀態 (數據已完美接軌)")
+        st.subheader("⚙️ 核對權限與銜接狀態")
         history_final, perm_final, cont_days_final = {}, {}, {}
         cols = st.columns(4)
         
