@@ -5,7 +5,7 @@ from io import BytesIO
 import datetime
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-大夜隔斷金盾版", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統-大夜隔斷修正版", layout="wide")
 
 # 中文星期對照表
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
@@ -232,14 +232,15 @@ if file_a and file_b and num_days > 0:
                 total_off_counts = {n: 0 for n in full_time_names}
                 streak_tracker = {n: int(cont_days_final[n]) for n in full_time_names}
                 
-                # --- 【新規則核心】大夜班（N）跨月預約隔斷處理 ---
+                # 【修復重點：提前宣告變數狀態】
+                valid_month = True
+                
+                # --- 大夜班（N）跨月預約隔斷處理 ---
                 for n in full_time_names:
-                    # 如果上個月最後一天是大夜班(N)，本月第 1 天和第 2 天「強制封鎖」不能排白班(D)
                     if history_final[n] == "N":
                         if num_days > 0 and bg_vacation[n][0] == "D": valid_month = False
                         if num_days > 1 and bg_vacation[n][1] == "D": valid_month = False
 
-                valid_month = True
                 for d in range(num_days):
                     target = {"D": 4, "E": 3, "N": 2}
                     for pt_name in part_time_names:
@@ -272,6 +273,141 @@ if file_a and file_b and num_days > 0:
                                 if n in pool: pool.remove(n)
 
                     # 處理預約班別（含 N 接 D 間隔兩天防呆）
+                    for n in pool.copy():
+                        v = bg_vacation[n][d]
+                        if v in ["D", "E", "N"]:
+                            if target[v] > 0:
+                                prev_1 = res[n][d-1] if d > 0 else history_final[n]
+                                prev_2 = res[n][d-2] if d > 1 else "off"
+                                
+                                # 檢驗過渡：前1天或前2天是大夜班(N)，今天絕對禁止接白班(D)
+                                if (prev_1 == "N" or prev_2 == "N") and v == "D":
+                                    valid_month = False
+                                # E接D花班安全鎖
+                                elif prev_1 == "E" and v == "D":
+                                    valid_month = False
+                                else:
+                                    res[n][d] = v
+                                    target[v] -= 1
+                                    streak_tracker[n] += 1
+                                    pool.remove(n)
+                            else:
+                                valid_month = False
+
+                    # 動態融斷
+                    needed_slots = sum(max(0, target[s]) for s in ["N", "E", "D"])
+                    if len(pool) < needed_slots:
+                        while len(pool) < (target["N"] + target["E"] + target["D"]):
+                            if target["D"] > 0: target["D"] -= 1
+                            elif target["E"] > 0: target["E"] -= 1
+                            elif target["N"] > 0: target["N"] -= 1
+                            else: break
+
+                    random.shuffle(pool)
+                    pool.sort(key=lambda x: total_off_counts[x], reverse=True)
+
+                    # 系統自動分派班別
+                    for shift in ["N", "E", "D"]:
+                        qualified = []
+                        for n in pool:
+                            if shift in perm_final[n]:
+                                prev_1 = res[n][d-1] if d > 0 else history_final[n]
+                                prev_2 = res[n][d-2] if d > 1 else "off"
+                                
+                                # 抽白班(D)，且前1天或前2天是大夜班(N)，直接剔除資格！
+                                if shift == "D" and (prev_1 == "N" or prev_2 == "N"):
+                                    continue
+                                # E接D花班過濾
+                                if shift == "D" and prev_1 == "E":
+                                    continue
+                                    
+                                qualified.append(n)
+                                    
+                        for _ in range(max(0, target[shift])):
+                            if qualified:
+                                chosen = qualified.pop(0)
+                                res[chosen][d] = shift
+                                streak_tracker[chosen] += 1
+                                if chosen in pool: pool.remove(chosen)
+                    
+                    for n in pool:
+                        res[n][d] = "off"
+                        total_off_counts[n] += 1
+                        
+                if valid_month and all(total_off_counts[n] >= 8 for n in full_time_names):
+                    final_res = res
+                    next_month_history_row = {}
+                    next_month_streak_row = {}
+                    for n in display_names:
+                        next_month_history_row[n] = res[n][-1]
+                        
+                        s_count = 0
+                        for cell_b in reversed(res[n]):
+                            if cell_b in ["D", "E", "N"]: s_count += 1
+                            else: break
+                        if s_count == num_days and res[n][0] in ["D", "E", "N"]:
+                            s_count += int(cont_days_final[n])
+                        next_month_streak_row[n] = s_count
+
+                    success_schedule = True
+                    break
+            
+            if not success_schedule:
+                st.error("⚠️ 人力鎖定或大夜排班間隔過窄（大夜接白班須隔2天）。請試著調整部分預班表，或重新點擊啟動排班！")
+            else:
+                st.success("🎉 排班成功！已通過【大夜接白班中間強制休息2天】之最新安全規範檢驗！")
+                
+                final_df = pd.DataFrame(final_res).T
+                final_df.columns = date_headers
+                
+                # 橫向統計
+                def count_off_days(row):
+                    return sum(1 for cell in row if str(cell).lower() in ["off", "v", "r"])
+                    
+                final_df["總休假天數"] = final_df.apply(count_off_days, axis=1)
+                final_df["系統接續_最後班別"] = [next_month_history_row[n] for n in final_df.index]
+                final_df["系統接續_連續天數"] = [next_month_streak_row[n] for n in final_df.index]
+                
+                # 縱向統計
+                stat_rows = {}
+                for header in date_headers:
+                    col_data = final_df[header]
+                    count_d = sum(1 for cell in col_data if str(cell).upper() == "D")
+                    count_e = sum(1 for cell in col_data if str(cell).upper() == "E")
+                    count_n = sum(1 for cell in col_data if str(cell).upper() == "N")
+                    stat_rows[header] = {"白班": count_d, "小夜": count_e, "大夜": count_n}
+                df_stats = pd.DataFrame(stat_rows)
+                
+                st.subheader("🎉 最終排班結果")
+                st.dataframe(final_df, use_container_width=True)
+                
+                df_stats_extended = df_stats.copy()
+                df_stats_extended["總休假天數"] = ""
+                df_stats_extended["系統接續_最後班別"] = ""
+                df_stats_extended["系統接續_連續天數"] = ""
+                
+                empty_row = pd.Series([None] * len(final_df.columns), index=final_df.columns)
+                
+                download_df = pd.concat([
+                    final_df,
+                    pd.DataFrame([empty_row], columns=final_df.columns),
+                    pd.DataFrame([["--- 每日人力總人數核對 ---"] + [""] * (len(final_df.columns)-1)], columns=final_df.columns),
+                    df_stats_extended
+                ])
+
+                out = BytesIO()
+                with pd.ExcelWriter(out) as w: 
+                    download_df.to_excel(w, sheet_name="2F綜合建議班表")
+                    
+                st.download_button(
+                    label="📥 下載【新規則升級版】合併 Excel 檔", 
+                    data=out.getvalue(), 
+                    file_name=f"2F_Schedule_Final_{start_date}.xlsx",
+                    use_container_width=True
+                )
+
+    except Exception as e:
+        st.error(f"系統解析錯誤: {e}")間隔兩天防呆）
                     for n in pool.copy():
                         v = bg_vacation[n][d]
                         if v in ["D", "E", "N"]:
