@@ -4,46 +4,6 @@ import random
 from io import BytesIO
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-日期精準對齊版", layout="wide")
-
-# --- 1. 背景解析邏輯 ---
-def get_staff_configs(file):
-    df = pd.read_excel(file, header=None)
-    configs = {}
-    start_row = 0
-    
-    # 定位起始行
-    for r in range(min(15, len(df))):
-        row_str = "".join(str(v) for v in df.iloc[r].values)
-        if "姓名" in row_str or "職級" in row_str:
-            start_row = r
-            break
-
-    for i in range(start_row + 1, len(df)):
-        row = df.iloc[i]
-        if len(row) < 3: continue
-        
-        perm = str(row.iloc[0]).strip().upper() if pd.notna(row.iloc[0]) else "DEN"
-        no = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
-        name = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
-        
-        # 基礎過濾
-        if (no == "" or no == "nan") and (name == "" or name == "nan"): continue
-        if "星期" in no or "星期" in name or "姓名" in name: continue
-        
-        # 決定顯示的 Key
-        display_label = no if (no != "nan" and no != "") else name
-        if display_label == "" or display_label == "nan": continue 
-
-        # 強力封殺結尾的統計與編號雜訊欄位
-        clean_check = display_label.replace(" ", "").upper()
-        if clean_check in ["OFF", "R", "V", "ALL", "TOTAL", "統計", "D4", "E3", "N2"]: 
-            continueimport streamlit as st
-import pandas as pd
-import random
-from io import BytesIO
-import re
-
 st.set_page_config(page_title="2F 護理排班系統-全功能統計版", layout="wide")
 
 # --- 1. 背景解析邏輯 ---
@@ -266,19 +226,17 @@ if file_a and file_b:
 
             st.success("🎉 自動排班與人數統計計算完成！")
             
-            # --- 【修改與新增重點】建立含統計資訊的 DataFrame ---
+            # 建立含統計資訊的 DataFrame
             final_df = pd.DataFrame(res).T
             final_df.columns = [i for i in range(1, num_days + 1)]
             
             # 1. 橫向統計：計算每個人 4 週（整個月）休幾天假
-            # 只要班別是 'off', 'v', 'R' (忽略大小寫) 都算休假
             def count_off_days(row):
                 return sum(1 for cell in row if str(cell).lower() in ["off", "v", "r"])
             
             final_df["總休假天數"] = final_df.apply(count_off_days, axis=1)
             
             # 2. 縱向統計：計算每天的 D, E, N 人數
-            # 建立一個統計用的 DataFrame 接在原本表格下面
             stat_rows = {}
             for d in range(1, num_days + 1):
                 col_data = final_df[d]
@@ -292,14 +250,14 @@ if file_a and file_b:
                     "大夜 (2人)": f"{count_n}人"
                 }
             
-            # 轉置統計列並加到主表格最下方
             df_stats = pd.DataFrame(stat_rows).T
-            # 把統計結果合併進主畫面顯示
+            
+            # 顯示合併結果
             st.subheader("🎉 最終排班結果（含休假與每日人力統計）")
             st.dataframe(final_df, use_container_width=True)
             
             st.markdown("### 📊 每日各班別總人數核對")
-            st.table(df_stats.T) # 用精緻的靜態表格呈現人數，一眼就能看清是否滿足 4D/3E/2N
+            st.table(df_stats.T)
             
             # 下載 Excel
             out = BytesIO()
