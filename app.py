@@ -235,7 +235,7 @@ if file_a and file_b and num_days > 0:
                 total_off_counts = {str(n): 0 for n in full_time_names}
                 streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
                 
-                # --- 大夜班（N）跨月預約隔斷處理（短路保護） ---
+                # --- 大夜班（N）跨月預約隔斷處理 ---
                 for n in full_time_names:
                     if history_final[n] == "N":
                         if num_days > 0 and bg_vacation[n][0] == "D": valid_month = False
@@ -269,7 +269,7 @@ if file_a and file_b and num_days > 0:
                     for n in pool.copy():
                         prev_is_off = (res[n][d-1] in ["off", "v", "R"]) if d > 0 else (history_final[n] in ["off", "v", "R"])
                         next_is_off = (bg_vacation[n][d+1] == "R") if d < (num_days - 1) else False
-                        if prev_is_off and next_is_off:
+                        if prev_is_off && next_is_off:
                             res[n][d] = "off"
                             total_off_counts[n] += 1
                             if n in pool: pool.remove(n)
@@ -352,7 +352,7 @@ if file_a and file_b and num_days > 0:
                             valid_month = False
                             break
 
-                # 提取成功數據
+                # 提取成功數據（保持 res 的原始日期天數，不進行 append）
                 if valid_month and all(total_off_counts[n] >= 8 for n in full_time_names):
                     final_res = {str(k): v for k, v in res.items()}
                     for n in display_names:
@@ -372,10 +372,12 @@ if file_a and file_b and num_days > 0:
             else:
                 st.success("🎉 排班大成功！已通過所有防呆安全規範（無碎班、不上單天班、大夜隔開2天）。")
                 
-                # 【終極對齊防線 1】先用最純粹的常規天數（如 31 天）建立乾淨的 DataFrame
-                final_df = pd.DataFrame.from_dict(final_res, orient='index', columns=date_headers)
+                # 【黃金修復核心】使用最標準的 Pandas 轉置方式建立 DataFrame，永不踩雷！
+                final_df = pd.DataFrame(final_res) # 此時橫軸是人名(13欄)，縱軸是天數(31行)
+                final_df = final_df.T              # 翻轉矩陣：橫軸變日期(31欄)，縱軸變人名(14行)
+                final_df.columns = date_headers    # 正式指定日期標頭
                 
-                # 【終極對齊防線 2】強制將表格索引與名單陣列全部同化為純字串，全面降維打擊型態地雷！
+                # 將索引型態同化為字串，消除比對地雷
                 final_df.index = final_df.index.astype(str)
                 str_display_names = [str(n) for n in display_names]
                 
@@ -383,12 +385,12 @@ if file_a and file_b and num_days > 0:
                 def count_off_days(row):
                     return sum(1 for cell in row if str(cell).lower() in ["off", "v", "r"])
                 
-                # 【完美橫向追加】直接使用 Pandas 官方最高效、最不易衝突的方式追加這三個接續直欄！
+                # 用高效率的標準分配語法，橫向追加新欄位
                 final_df["總休假天數"] = final_df.apply(count_off_days, axis=1)
                 final_df["系統接續_最後班別"] = [next_month_history_row[n] for n in str_display_names]
                 final_df["系統接續_連續天數"] = [next_month_streak_row[n] for n in str_display_names]
                 
-                # 縱向統計
+                # 縱向統計（人數核對）
                 stat_rows = {}
                 for header in date_headers:
                     col_data = final_df[header]
