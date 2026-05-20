@@ -4,7 +4,7 @@ import random
 from io import BytesIO
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-正職雙重休假保障版", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統-日期精準對齊版", layout="wide")
 
 # --- 1. 背景解析邏輯 ---
 def get_staff_configs(file):
@@ -159,7 +159,7 @@ if file_a and file_b:
             # 用於追蹤每位正職已安排的休假總天數（包含 off, v, R）
             off_counts = {n: 0 for n in full_time_names}
 
-            # B. 正職人員排班邏輯
+            # B. 正職人員排班邏輯 (d 代表陣列索引 0 ~ 30)
             for d in range(num_days):
                 target = {"D": 4, "E": 3, "N": 2}
                 
@@ -170,17 +170,18 @@ if file_a and file_b:
                 
                 pool = full_time_names.copy()
                 
-                # 【新增規則實作 1】每週至少一休強制檢查（每 7 天為一週單位：第7、14、21、28天）
-                # 如果這週的前六天都沒休假，今天（週日/第七天）強制讓該員工加入休假群
-                current_week_start = (d // 7) * 7
-                for n in full_time_names:
-                    if d > current_week_start and (d % 7 == 6): # 每週的最後一天
-                        # 檢查這週前面幾天有沒有任何一天是休假
-                        has_off_this_week = any(res[n][w_d] in ["off", "v", "R"] for w_d in range(current_week_start, d))
+                # 【修改重點 1】每週至少一休強制檢查（對齊從 1 開始的真實日期：第7, 14, 21, 28天）
+                real_day = d + 1  # 轉換為真實日期 (1 ~ 31)
+                current_week_start_idx = (d // 7) * 7
+                if real_day % 7 == 0:  # 剛好是每週的最後一天
+                    for n in full_time_names:
+                        # 檢查這週前面 6 天有沒有任何一天放假
+                        has_off_this_week = any(res[n][w_d] in ["off", "v", "R"] for w_d in range(current_week_start_idx, d))
                         if not has_off_this_week:
                             res[n][d] = "off"
                             off_counts[n] += 1
-                            if n in pool: pool.remove(n)
+                            if n in pool: 
+                                pool.remove(n)
 
                 # 優先處理正職背景預約假
                 for n in full_time_names.copy():
@@ -202,7 +203,7 @@ if file_a and file_b:
                             off_counts[n] += 1
                             pool.remove(n)
 
-                # 【新增規則實作 2】4週總共至少8天休假：動態打亂排序，讓「目前休最少天的人」排在前面優先放假
+                # 4週總共至少8天休假：優先讓假少的人抽班別
                 random.shuffle(pool)
                 pool.sort(key=lambda x: off_counts[x])
 
@@ -213,28 +214,31 @@ if file_a and file_b:
                         if qualified:
                             chosen = qualified.pop()
                             res[chosen][d] = shift
-                            pool.remove(chosen)
+                            if chosen in pool: 
+                                pool.remove(chosen)
                 
-                # 沒被分到班的人，通通轉為休假，並累加休假計數
+                # 沒被分到班的人轉休假
                 for n in pool: 
                     res[n][d] = "off"
                     off_counts[n] += 1
 
-            # --- 最終補強檢查（安全防線） ---
-            # 萬一因為隨機性導致有人整個月休假低於 8 天，從他上班的天數中挑選非預約班強制改成 off
+            # 最終補強檢查：確保每人至少 8 休
             for n in full_time_names:
                 while off_counts[n] < 8:
-                    # 隨機挑一天不是休假的、也不是預班表 B 指定的班，強制改成 off
                     available_tweak_days = [d for d in range(num_days) if res[n][d] not in ["off", "v", "R"] and bg_vacation[n][d] == ""]
                     if available_tweak_days:
                         tweak_d = random.choice(available_tweak_days)
                         res[n][tweak_d] = "off"
                         off_counts[n] += 1
                     else:
-                        break # 防死迴圈
+                        break
 
-            st.success("🎉 自動排班完成！已完美套用新規則：【正職每週至少一休】且【4週總休假至少 8 天（只能多不能少）】。")
+            st.success("🎉 自動排班完成！已完美套用所有規則。")
+            
+            # 【修改重點 2】將產出的表格欄位名稱，從原本的 0~30 改成 1~31
             final_df = pd.DataFrame(res).T
+            final_df.columns = [i for i in range(1, num_days + 1)]
+            
             st.dataframe(final_df, use_container_width=True)
             
             out = BytesIO()
