@@ -153,7 +153,7 @@ def schedule_part_time(num_days):
         if idx < num_days: backup_days[idx] = "D"
     return backup_days
 
-st.title("🏥 2F 護理排班系統 (終極金盾完美版)")
+st.title("🏥 2F 護理排班系統 (型態對齊完美完全體)")
 
 # --- 3. 側邊欄日期與檔案設定 ---
 with st.sidebar:
@@ -265,11 +265,11 @@ if file_a and file_b and num_days > 0:
                             total_off_counts[n] += 1
                             if n in pool: pool.remove(n)
 
-                    # 阻斷單天班 (不上單天班)
+                    # 【精準修復行】阻斷單天班 (將原本的 && 改為 Python 的標準 and)
                     for n in pool.copy():
                         prev_is_off = (res[n][d-1] in ["off", "v", "R"]) if d > 0 else (history_final[n] in ["off", "v", "R"])
                         next_is_off = (bg_vacation[n][d+1] == "R") if d < (num_days - 1) else False
-                        if prev_is_off && next_is_off:
+                        if prev_is_off and next_is_off:
                             res[n][d] = "off"
                             total_off_counts[n] += 1
                             if n in pool: pool.remove(n)
@@ -352,7 +352,7 @@ if file_a and file_b and num_days > 0:
                             valid_month = False
                             break
 
-                # 提取成功數據（保持 res 的原始日期天數，不進行 append）
+                # 提取成功數據
                 if valid_month and all(total_off_counts[n] >= 8 for n in full_time_names):
                     final_res = {str(k): v for k, v in res.items()}
                     for n in display_names:
@@ -372,12 +372,11 @@ if file_a and file_b and num_days > 0:
             else:
                 st.success("🎉 排班大成功！已通過所有防呆安全規範（無碎班、不上單天班、大夜隔開2天）。")
                 
-                # 【黃金修復核心】使用最標準的 Pandas 轉置方式建立 DataFrame，永不踩雷！
-                final_df = pd.DataFrame(final_res) # 此時橫軸是人名(13欄)，縱軸是天數(31行)
-                final_df = final_df.T              # 翻轉矩陣：橫軸變日期(31欄)，縱軸變人名(14行)
-                final_df.columns = date_headers    # 正式指定日期標頭
+                # 標準二維翻轉建立 DataFrame
+                final_df = pd.DataFrame(final_res) 
+                final_df = final_df.T              
+                final_df.columns = date_headers    
                 
-                # 將索引型態同化為字串，消除比對地雷
                 final_df.index = final_df.index.astype(str)
                 str_display_names = [str(n) for n in display_names]
                 
@@ -385,7 +384,7 @@ if file_a and file_b and num_days > 0:
                 def count_off_days(row):
                     return sum(1 for cell in row if str(cell).lower() in ["off", "v", "r"])
                 
-                # 用高效率的標準分配語法，橫向追加新欄位
+                # 橫向追加統計新直欄
                 final_df["總休假天數"] = final_df.apply(count_off_days, axis=1)
                 final_df["系統接續_最後班別"] = [next_month_history_row[n] for n in str_display_names]
                 final_df["系統接續_連續天數"] = [next_month_streak_row[n] for n in str_display_names]
@@ -403,11 +402,11 @@ if file_a and file_b and num_days > 0:
                 st.subheader("🎉 最終排班結果")
                 st.dataframe(final_df, use_container_width=True)
                 
-                # 補滿延伸報表的右側空白欄位，實現完美的 concat 拼接
+                # 補滿延伸報表的右側空白欄位
                 df_stats_extended = df_stats.copy()
                 df_stats_extended["總休假天數"] = ""
                 df_stats_extended["系統接續_最後班別"] = ""
-                df_stats_extended["系統接續_連續天數"] = ""
+                df_stats_extended["系統接續_連續天天數"] = ""
                 
                 empty_row = pd.Series([None] * len(final_df.columns), index=final_df.columns)
                 
