@@ -153,7 +153,7 @@ def schedule_part_time(num_days):
         if idx < num_days: backup_days[idx] = "D"
     return backup_days
 
-st.title("🏥 2F 護理排班系統 (終極解鎖完全體)")
+st.title("🏥 2F 護理排班系統 (終極完全體)")
 
 # --- 3. 側邊欄日期與檔案設定 ---
 with st.sidebar:
@@ -233,7 +233,7 @@ if file_a and file_b and num_days > 0:
                 total_off_counts = {str(n): 0 for n in full_time_names}
                 streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
                 
-                # --- 大夜班（N）跨月預約隔斷處理（短路保護） ---
+                # --- 大夜班（N）跨月預約隔斷處理 ---
                 for n in full_time_names:
                     if history_final[n] == "N":
                         if num_days > 0 and bg_vacation[n][0] == "D": valid_month = False
@@ -350,13 +350,10 @@ if file_a and file_b and num_days > 0:
                             valid_month = False
                             break
 
-                # 【黃金修復核心】在判定完全全過的一瞬間，直接將「總休假天數」與「接續資料」注入進字典的最後兩格欄位！
+                # 數據橫向打包
                 if valid_month and all(total_off_counts[n] >= 8 for n in full_time_names):
                     for n in display_names:
-                        # 1. 計算最後一天班別
                         last_shift_val = res[n][-1]
-                        
-                        # 2. 計算月底最後的連續天數
                         s_count = 0
                         for cell_b in reversed(res[n]):
                             if cell_b in ["D", "E", "N"]: s_count += 1
@@ -364,13 +361,11 @@ if file_a and file_b and num_days > 0:
                         if s_count == num_days and res[n][0] in ["D", "E", "N"]:
                             s_count += int(cont_days_final[n])
                         
-                        # 3. 計算這排同仁的總休假天數
                         off_days_count = sum(1 for cell in res[n] if str(cell).lower() in ["off", "v", "r"])
                         
-                        # 【數據鏈打包】直接平行塞入這個人的 res 陣列尾端，不要事後追加！
-                        res[n].append(off_days_count)          # 倒數第三欄
-                        res[n].append(last_shift_val)         # 倒數第二欄
-                        res[n].append(s_count)                # 倒數第一欄
+                        res[n].append(off_days_count)          
+                        res[n].append(last_shift_val)         
+                        res[n].append(s_count)                
                         
                     final_res = res
                     success_schedule = True
@@ -381,14 +376,13 @@ if file_a and file_b and num_days > 0:
             else:
                 st.success("🎉 排班大成功！已通過所有防呆安全規範（無碎班、不上單天班、大夜隔開2天）。")
                 
-                # 直接一行載入字典，型態完全自然對齊，絕無任何外來變數干擾
-                final_df = pd.DataFrame.from_dict(final_res, orient='index')
-                
-                # 建立完整的標頭清單（包含日期與右側橫向的三個接續欄位標籤）
+                # 建立完整的標頭清單
                 extended_headers = date_headers + ["總休假天數", "系統接續_最後班別", "系統接續_連續天數"]
-                final_df.columns = extended_headers
                 
-                # 縱向統計（人數核對）
+                # 【終極對齊核心】在建立 DataFrame 的瞬間直接強制指定 columns 寬度！
+                final_df = pd.DataFrame.from_dict(final_res, orient='index', columns=extended_headers)
+                
+                # 縱向統計
                 stat_rows = {}
                 for header in date_headers:
                     col_data = final_df[header]
@@ -401,7 +395,7 @@ if file_a and file_b and num_days > 0:
                 st.subheader("🎉 最終排班結果")
                 st.dataframe(final_df, use_container_width=True)
                 
-                # 補滿延伸報表的右側空白欄位，以便垂直 concat 對齊
+                # 補滿延伸報表的右側空白欄位，實現完美的 concat 拼接
                 df_stats_extended = df_stats.copy()
                 df_stats_extended["總休假天數"] = ""
                 df_stats_extended["系統接續_最後班別"] = ""
