@@ -5,7 +5,7 @@ from io import BytesIO
 import datetime
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-終極防呆金盾版", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統", layout="wide")
 
 # 中文星期對照表
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
