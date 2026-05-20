@@ -4,7 +4,7 @@ import random
 from io import BytesIO
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-完美過濾版", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統-完美過濾修復版", layout="wide")
 
 # --- 1. 背景解析邏輯 ---
 def get_staff_configs(file):
@@ -35,8 +35,9 @@ def get_staff_configs(file):
         display_label = no if (no != "nan" and no != "") else name
         if display_label == "" or display_label == "nan": continue 
 
-        # 【核心修正】強力封殺結尾的統計雜訊欄位，不讓它們變成方塊
-        if display_label.upper() in ["OFF", "R", "V", "ALL", "TOTAL", "統計"]: 
+        # 【精準防禦】強力封殺結尾的統計與編號雜訊欄位，不讓它們變成方塊
+        clean_check = display_label.replace(" ", "").upper()
+        if clean_check in ["OFF", "R", "V", "ALL", "TOTAL", "統計", "D4", "E3", "N2"]: 
             continue
 
         is_pt = "半職" in no or "半職" in name
@@ -163,6 +164,45 @@ if file_a and file_b:
                 target = {"D": 4, "E": 3, "N": 2}
                 
                 for pt_name in part_time_names:
-                    if res[pt_name][d] == "D": target["D"] -= 1
+                    if res[pt_name][d] == "D": 
+                        target["D"] -= 1
                 
-                pool = full_time_names.
+                pool = full_time_names.copy()
+                random.shuffle(pool)
+                
+                for n in full_time_names:
+                    v = bg_vacation[n][d]
+                    if v in ["D", "E", "N"]:
+                        res[n][d] = v
+                        target[v] -= 1
+                        pool.remove(n)
+                    elif v == "R":
+                        res[n][d] = "off"
+                        pool.remove(n)
+                    else:
+                        prev = res[n][d-1] if d > 0 else history_final[n]
+                        if prev == "N":
+                            res[n][d] = "v"
+                            pool.remove(n)
+                
+                for shift in ["N", "E", "D"]:
+                    qualified = [n for n in pool if shift in perm_final[n]]
+                    for _ in range(max(0, target[shift])):
+                        if qualified:
+                            chosen = qualified.pop()
+                            res[chosen][d] = shift
+                            pool.remove(chosen)
+                
+                for n in pool: 
+                    res[n][d] = "off"
+
+            st.success("🎉 自動排班計算完成！")
+            final_df = pd.DataFrame(res).T
+            st.dataframe(final_df, use_container_width=True)
+            
+            out = BytesIO()
+            with pd.ExcelWriter(out) as w: final_df.to_excel(w)
+            st.download_button("📥 下載 Excel 結果", out.getvalue(), "Schedule_Final.xlsx")
+
+    except Exception as e:
+        st.error(f"系統執行失敗: {e}")
