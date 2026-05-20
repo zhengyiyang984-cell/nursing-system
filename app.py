@@ -5,12 +5,12 @@ from io import BytesIO
 import datetime
 import re
 
-st.set_page_config(page_title="2F 護理排班系統", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統-接軌完美修復版", layout="wide")
 
 # 中文星期對照表
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# --- 1. 背景解析與格式防呆（新增：支援讀取上月產出的接續欄位） ---
+# --- 1. 背景解析與格式防呆（精準過濾統計與接續標籤，防止生成錯亂方塊） ---
 def get_staff_configs(file):
     df = pd.read_excel(file, header=None)
     configs = {}
@@ -44,15 +44,21 @@ def get_staff_configs(file):
         no = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
         name = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
         
+        # 基礎過濾：空白或星期欄位直接跳過
         if (no == "" or no == "nan") and (name == "" or name == "nan"): continue
-        if "星期" in no or "星期" in name or "姓名" in name or "---" in str(row.iloc[0]): continue
+        if "星期" in no or "星期" in name or "姓名" in name: continue
         
+        # 【核心過濾防線 1】一旦遇到任何包含系統接續或統計的分隔線或關鍵字，立刻跳過不處理
+        col0_str = str(row.iloc[0]).strip()
+        if "---" in col0_str or "下月接續" in col0_str: 
+            continue
+            
         display_label = no if (no != "nan" and no != "") else name
         if display_label == "" or display_label == "nan": continue 
 
-        # 封殺統計雜訊與標題行
+        # 【核心過濾防線 2】強力封殺所有可能混入序號的統計字眼，徹底消滅幽靈卡片
         clean_check = display_label.replace(" ", "").upper()
-        if clean_check in ["OFF", "R", "V", "ALL", "TOTAL", "統計", "D4", "E3", "N2", "白班", "小夜", "大夜"]: 
+        if any(keyword in clean_check for keyword in ["OFF", "R", "V", "ALL", "TOTAL", "統計", "D4", "E3", "N2", "白班", "小夜", "大夜", "每日人力", "人員"]): 
             continue
 
         is_pt = "半職" in no or "半職" in name
@@ -63,7 +69,7 @@ def get_staff_configs(file):
 
         # 防呆接軌核心：如果發現這份檔案含有上個月產出的接續標籤，直接精準讀取！
         if has_next_month_history:
-            # 在上月產出的表裡，display_label 會在 index 欄位
+            # 在上月產出的表裡，display_label 會在 index 欄位 (第0欄)
             for check_r in range(start_row + 1, len(df)):
                 if str(df.iloc[check_r, 0]).strip() == display_label:
                     if history_row_idx != -1:
@@ -125,7 +131,7 @@ def schedule_part_time(num_days):
         if idx < num_days: backup_days[idx] = "D"
     return backup_days
 
-st.title("🏥 2F 護理排班系統 ")
+st.title("🏥 2F 護理排班系統 (跨月接軌完美版)")
 
 # --- 3. 側邊欄日期設定 ---
 with st.sidebar:
@@ -144,7 +150,7 @@ with st.sidebar:
         st.error("⚠️ 錯誤：結束日期不能早於開始日期！")
         num_days = 0
 
-    file_a = st.file_uploader("1. 上傳【班表】(檔案 A - 支援直接丟入上月產出結果)", type=["xlsx"])
+    file_a = st.file_uploader("1. 上傳【班表】(檔案 A - 可直接上傳上月結果)", type=["xlsx"])
     file_b = st.file_uploader("2. 上傳【預班表】(檔案 B)", type=["xlsx"])
 
 if file_a and file_b and num_days > 0:
@@ -169,17 +175,17 @@ if file_a and file_b and num_days > 0:
                         elif val in ["D", "E", "N"]: bg_vacation[n][d] = val
                     break
 
-        st.success(f"✅ 成功辨識 {len(display_names)} 位人員（已啟動跨月自動接軌偵測）。")
+        st.success(f"✅ 成功辨識 {len(display_names)} 位有效同仁（已徹底隔離底部統計雜訊）。")
 
-        # --- 核對區（新增：若檔案內有上月留下來的資料，會直接自動填入免手動） ---
-        st.subheader("⚙️ 核對權限與銜接狀態 (已自動對齊上月產出資料)")
+        # --- 核對區 ---
+        st.subheader("⚙️ 核對權限與銜接狀態 (已完成上月接軌數據比對)")
         history_final, perm_final, cont_days_final = {}, {}, {}
         cols = st.columns(4)
         
         for i, n in enumerate(display_names):
             with cols[i % 4]:
                 with st.container(border=True):
-                    st.markdown(f"🔢 **人員：{n}**")
+                    st.markdown(f"🔢 **人員序號：{n}**")
                     raw_perm = st.text_input(f"權限", value=staff_configs[n]["perm"], key=f"p_{n}")
                     perm_final[n] = raw_perm.strip().upper().replace(",", "").replace(" ", "")
                     if not perm_final[n]: perm_final[n] = "DEN"
@@ -297,20 +303,15 @@ if file_a and file_b and num_days > 0:
                         
                 if valid_month and all(total_off_counts[n] >= 8 for n in full_time_names):
                     final_res = res
-                    # 計算排班結束後，每個人留給下個月的「最後班別」與「連續天數」
                     next_month_history_row = {}
                     next_month_streak_row = {}
                     for n in display_names:
                         next_month_history_row[n] = res[n][-1]
                         
-                        # 計算最後連續上班天數
                         s_count = 0
                         for cell_b in reversed(res[n]):
-                            if cell_b in ["D", "E", "N"]:
-                                s_count += 1
-                            else:
-                                break
-                        # 如果一路連到月初，要把本月起點連續天數也灌進去
+                            if cell_b in ["D", "E", "N"]: s_count += 1
+                            else: break
                         if s_count == num_days and res[n][0] in ["D", "E", "N"]:
                             s_count += int(cont_days_final[n])
                         next_month_streak_row[n] = s_count
@@ -321,7 +322,7 @@ if file_a and file_b and num_days > 0:
             if not success_schedule:
                 st.error("⚠️ 無法算出符合安全防呆與休假規定的班表。請放寬核對區的『權限』或再試一次！")
             else:
-                st.success("🎉 排班成功！已自動注入「下月無縫接軌數據鏈」。")
+                st.success("🎉 排班成功！已自動完成跨月接軌。")
                 
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers
@@ -344,19 +345,16 @@ if file_a and file_b and num_days > 0:
                 st.subheader("🎉 最終排班結果")
                 st.dataframe(final_df, use_container_width=True)
                 
-                # 建立上下拼接下載的超強 DataFrame
+                # 建立上下拼接下載的 DataFrame
                 export_df = final_df.copy()
                 empty_row = pd.Series([None] * len(export_df.columns), index=export_df.columns)
-                
                 df_stats_extended = df_stats.copy()
                 df_stats_extended["總休假天數"] = "" 
                 
-                # 【接軌核心】建立兩行完全給下個月系統讀取的特殊隱藏列
+                # 建立兩行接續標籤
                 df_next_connect = pd.DataFrame(columns=export_df.columns)
-                
-                history_list = [next_month_history_row[n] for n in display_names] + [""] # 補足總休假天數欄
+                history_list = [next_month_history_row[n] for n in display_names] + [""]
                 streak_list = [next_month_streak_row[n] for n in display_names] + [""]
-                
                 df_next_connect.loc["下月接續_最後班別"] = history_list
                 df_next_connect.loc["下月接續_連續天數"] = streak_list
                 
