@@ -4,7 +4,7 @@ import random
 from io import BytesIO
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-完美最終版", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統-半職天數嚴格版", layout="wide")
 
 # --- 1. 背景解析邏輯 ---
 def get_staff_configs(file):
@@ -12,7 +12,7 @@ def get_staff_configs(file):
     configs = {}
     start_row = 0
     
-    # 定位起始行 (尋找包含「姓名」或「職級」的標頭)
+    # 定位起始行
     for r in range(min(15, len(df))):
         row_str = "".join(str(v) for v in df.iloc[r].values)
         if "姓名" in row_str or "職級" in row_str:
@@ -27,18 +27,14 @@ def get_staff_configs(file):
         no = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
         name = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
         
-        # 基礎過濾：如果兩格都是空的，或是標題列，就直接跳過
         if (no == "" or no == "nan") and (name == "" or name == "nan"): continue
         if "星期" in no or "星期" in name or "姓名" in name: continue
         
-        # 決定顯示的 Key（優先用序號，沒有序號用姓名）
         display_label = no if (no != "nan" and no != "") else name
-        if display_label == "" or display_label == "nan": continue # 雙重防禦，封殺空白卡片
+        if display_label == "" or display_label == "nan": continue 
 
-        # 【核心修正】智慧判定半職：只要序號或姓名包含「半職」，這名員工就是半職
         is_pt = "半職" in no or "半職" in name
 
-        # 抓取最後一天班別作為銜接預設值
         last_day = "off"
         for cell in reversed(row.values[3:8]):
             c = str(cell).strip().upper()
@@ -47,7 +43,6 @@ def get_staff_configs(file):
                 break
         if last_day not in ["D", "E", "N", "off", "v", "R"]: last_day = "off"
 
-        # 建立純姓名 ID 用於跟檔案 B 進行背景對齊
         pure_id = re.sub(r'[\s\u3000]', '', name) if (name != "nan" and name != "") else display_label
 
         configs[display_label] = {
@@ -58,27 +53,58 @@ def get_staff_configs(file):
         }
     return configs
 
-# --- 2. 半職專用排班演算 (連續上班 2-3 天後隨機休，整個月恰好 10 天) ---
+# --- 2. 半職專用排班演算（嚴格防禦上1天與連上4天，且精準10天班） ---
 def schedule_part_time(num_days):
-    days = ["off"] * num_days
-    work_count = 0
-    current_index = 0
-    
-    while work_count < 10 and current_index < num_days:
-        work_streak = random.choice([2, 3]) # 隨機挑選上 2 天或 3 天
-        if work_count + work_streak > 10: 
-            work_streak = 10 - work_count
+    # 重試機制，確保一定能分配出完美的班表長度
+    for _ in range(100):
+        days = ["off"] * num_days
         
-        for _ in range(work_streak):
-            if current_index < num_days:
-                days[current_index] = "D"
-                work_count += 1
-                current_index += 1
+        # 1. 將 10 天的工作量拆解為純粹的「2天班」與「3天班」拼圖
+        # 組合可能是 [3, 3, 2, 2]、[2, 2, 2, 2, 2]、[3, 3, 3, 1(不合法)]
+        # 為了杜絕 1 天，我們只允許由 2 和 3 組成合計為 10 的陣列
+        available_patterns = [
+            [2, 2, 2, 2, 2],
+            [3, 3, 2, 2],
+            [3, 2, 3, 2],
+            [2, 3, 2, 3],
+            [2, 2, 3, 3]
+        ]
+        work_blocks = random.choice(available_patterns)
+        random.shuffle(work_blocks) # 打亂班別區塊順序，讓休假不規律
         
-        # 休息不規律，隨機休 1 到 3 天
-        current_index += random.randint(1, 3)
+        # 2. 生成隨機的休息區塊間隔（不規律休息）
+        # 我們要把這些工作區塊分散放入一個月的天數中
+        current_idx = random.randint(0, 2) # 起始隨機空幾天
+        success = True
         
-    return days
+        for block in work_blocks:
+            # 如果剩餘空間不夠塞入這個工作區塊，宣告失敗並重試
+            if current_idx + block > num_days:
+                success = False
+                break
+            
+            # 填入工作日
+            for _ in range(block):
+                days[current_idx] = "D"
+                current_idx += 1
+            
+            # 工作區塊結束後，強制隨機休息 2~4 天（確保下一個工作區塊不會跟這個黏在一起變4天以上）
+            current_idx += random.randint(2, 4)
+            
+        # 驗證總上班天數是否剛好為 10 天，且沒有任何不合法的連班
+        if success and days.count("D") == 10:
+            # 最終安全核對：檢查是否有單獨 1 天上班，或是連上 4 天的情況
+            days_str = "".join(["1" if d == "D" else "0" for d in days])
+            if "1111" not in days_str and "010" not in days_str and not days_str.startswith("10") and not days_str.endswith("01"):
+                return days
+                
+    # 萬一極端狀況沒跑出來，提供一個絕對安全的預設保底模組（符合3、3、2、2且分散）
+    backup_days = ["off"] * num_days
+    safe_indices = [2, 3, 4, 9, 10, 15, 16, 17, 22, 23] # 精準分散的 10 天
+    for idx in safe_indices:
+        if idx < num_days:
+            backup_days[idx] = "D"
+    return backup_days
 
 st.title("🏥 2F 護理排班系統")
 
@@ -93,7 +119,7 @@ if file_a and file_b:
         staff_configs = get_staff_configs(file_a)
         all_names = list(staff_configs.keys())
         
-        # 【精準排序】過濾分類，確保正職 1-13 在前，半職絕對在最後一行
+        # 排序：正職 1-13 在前，半職絕對在最後一行
         full_time_names = [n for n in all_names if not staff_configs[n]["is_part_time"]]
         part_time_names = [n for n in all_names if staff_configs[n]["is_part_time"]]
         display_names = full_time_names + part_time_names
@@ -111,16 +137,16 @@ if file_a and file_b:
                         elif val in ["D", "E", "N"]: bg_vacation[n][d] = val
                     break
 
-        st.success(f"✅ 已成功載入 {len(display_names)} 位有效人員（包含 13 位正職 與 置底半職）。")
+        st.success(f"✅ 已成功載入 {len(display_names)} 位人員（13位正職在前，半職已置底）。")
 
-        # --- 3. 完整套用你的專屬核對區代碼 ---
+        # --- 3. 專屬核對區代碼 ---
         st.subheader("⚙️ 核對權限與銜接狀態")
         history_final, perm_final, cont_days_final = {}, {}, {}
         cols = st.columns(4)
         
         for i, n in enumerate(display_names):
             with cols[i % 4]:
-                with st.container(border=True): # 使用方框美化
+                with st.container(border=True):
                     st.markdown(f"🔢 **序號：{n}**")
                     perm_final[n] = st.text_input(f"權限", value=staff_configs[n]["perm"], key=f"p_{n}")
                     history_final[n] = st.selectbox(f"上次班別", ["D", "E", "N", "off", "v", "R"], 
@@ -133,15 +159,15 @@ if file_a and file_b:
         if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
             res = {n: [""] * num_days for n in display_names}
             
-            # 先排半職人員（固定 10 天，滿足上2-3休1規則）
+            # A. 先行編排半職人員（嚴格套用 2-3 天區塊排班法，剛好 10 天）
             for pt_name in part_time_names:
                 res[pt_name] = schedule_part_time(num_days)
 
-            # 再排正職人員
+            # B. 正職人員排班邏輯
             for d in range(num_days):
                 target = {"D": 4, "E": 3, "N": 2}
                 
-                # 如果當天半職有上班，自動扣除正職的 D 班人力需求
+                # 如果當天半職有上 D 班，自動從當天正職需求中扣除
                 for pt_name in part_time_names:
                     if res[pt_name][d] == "D": 
                         target["D"] -= 1
@@ -157,12 +183,12 @@ if file_a and file_b:
                     elif v == "R":
                         res[n][d] = "off"; pool.remove(n)
                     else:
-                        # 銜接大夜下班強制休息邏輯
+                        # 銜接大夜強迫休假
                         prev = res[n][d-1] if d > 0 else history_final[n]
                         if prev == "N":
                             res[n][d] = "v"; pool.remove(n)
                 
-                # 依權限補滿每日班別需求
+                # 依權限補滿剩餘人力目標
                 for shift in ["N", "E", "D"]:
                     qualified = [n for n in pool if shift in perm_final[n]]
                     for _ in range(max(0, target[shift])):
@@ -171,7 +197,7 @@ if file_a and file_b:
                 
                 for n in pool: res[n][d] = "off"
 
-            st.success("🎉 自動排班計算完成！")
+            st.success("🎉 排班完成！半職人員已完美限制為「連上 2-3 天且整個月固定 10 天」。")
             final_df = pd.DataFrame(res).T
             st.dataframe(final_df, use_container_width=True)
             
