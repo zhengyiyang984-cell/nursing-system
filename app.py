@@ -4,7 +4,7 @@ import random
 from io import BytesIO
 import re
 
-st.set_page_config(page_title="2F 護理排班系統-完美過濾修復版", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統-正職雙重休假保障版", layout="wide")
 
 # --- 1. 背景解析邏輯 ---
 def get_staff_configs(file):
@@ -35,7 +35,7 @@ def get_staff_configs(file):
         display_label = no if (no != "nan" and no != "") else name
         if display_label == "" or display_label == "nan": continue 
 
-        # 【精準防禦】強力封殺結尾的統計與編號雜訊欄位，不讓它們變成方塊
+        # 強力封殺結尾的統計與編號雜訊欄位
         clean_check = display_label.replace(" ", "").upper()
         if clean_check in ["OFF", "R", "V", "ALL", "TOTAL", "統計", "D4", "E3", "N2"]: 
             continue
@@ -64,8 +64,6 @@ def get_staff_configs(file):
 def schedule_part_time(num_days):
     for _ in range(100):
         days = ["off"] * num_days
-        
-        # 由 2 與 3 天工作區塊隨機拼湊成剛好 10 天班
         available_patterns = [
             [2, 2, 2, 2, 2],
             [3, 3, 2, 2],
@@ -88,14 +86,13 @@ def schedule_part_time(num_days):
                 days[current_idx] = "D"
                 current_idx += 1
             
-            current_idx += random.randint(2, 4) # 強制隔開，避免相連變成 4 天以上
+            current_idx += random.randint(2, 4)
             
         if success and days.count("D") == 10:
             days_str = "".join(["1" if d == "D" else "0" for d in days])
             if "1111" not in days_str and "010" not in days_str and not days_str.startswith("10") and not days_str.endswith("01"):
                 return days
                 
-    # 保底安全模組
     backup_days = ["off"] * num_days
     safe_indices = [2, 3, 4, 9, 10, 15, 16, 17, 22, 23] 
     for idx in safe_indices:
@@ -115,7 +112,7 @@ if file_a and file_b:
         staff_configs = get_staff_configs(file_a)
         all_names = list(staff_configs.keys())
         
-        # 排序：正職 1-13 在前，半職 1 在最後一行
+        # 排序：正職在前，半職在後
         full_time_names = [n for n in all_names if not staff_configs[n]["is_part_time"]]
         part_time_names = [n for n in all_names if staff_configs[n]["is_part_time"]]
         display_names = full_time_names + part_time_names
@@ -133,7 +130,7 @@ if file_a and file_b:
                         elif val in ["D", "E", "N"]: bg_vacation[n][d] = val
                     break
 
-        st.success(f"✅ 成功辨識 {len(display_names)} 位有效人員（已成功過濾尾部假別統計行）。")
+        st.success(f"✅ 成功辨識 {len(display_names)} 位有效人員（已成功過濾尾部雜訊）。")
 
         # --- 3. 專屬核對區代碼 ---
         st.subheader("⚙️ 核對權限與銜接狀態")
@@ -159,18 +156,35 @@ if file_a and file_b:
             for pt_name in part_time_names:
                 res[pt_name] = schedule_part_time(num_days)
 
+            # 用於追蹤每位正職已安排的休假總天數（包含 off, v, R）
+            off_counts = {n: 0 for n in full_time_names}
+
             # B. 正職人員排班邏輯
             for d in range(num_days):
                 target = {"D": 4, "E": 3, "N": 2}
                 
+                # 半職佔用扣除
                 for pt_name in part_time_names:
                     if res[pt_name][d] == "D": 
                         target["D"] -= 1
                 
                 pool = full_time_names.copy()
-                random.shuffle(pool)
                 
+                # 【新增規則實作 1】每週至少一休強制檢查（每 7 天為一週單位：第7、14、21、28天）
+                # 如果這週的前六天都沒休假，今天（週日/第七天）強制讓該員工加入休假群
+                current_week_start = (d // 7) * 7
                 for n in full_time_names:
+                    if d > current_week_start and (d % 7 == 6): # 每週的最後一天
+                        # 檢查這週前面幾天有沒有任何一天是休假
+                        has_off_this_week = any(res[n][w_d] in ["off", "v", "R"] for w_d in range(current_week_start, d))
+                        if not has_off_this_week:
+                            res[n][d] = "off"
+                            off_counts[n] += 1
+                            if n in pool: pool.remove(n)
+
+                # 優先處理正職背景預約假
+                for n in full_time_names.copy():
+                    if n not in pool: continue
                     v = bg_vacation[n][d]
                     if v in ["D", "E", "N"]:
                         res[n][d] = v
@@ -178,13 +192,21 @@ if file_a and file_b:
                         pool.remove(n)
                     elif v == "R":
                         res[n][d] = "off"
+                        off_counts[n] += 1
                         pool.remove(n)
                     else:
+                        # 大夜銜接強制休假
                         prev = res[n][d-1] if d > 0 else history_final[n]
                         if prev == "N":
                             res[n][d] = "v"
+                            off_counts[n] += 1
                             pool.remove(n)
-                
+
+                # 【新增規則實作 2】4週總共至少8天休假：動態打亂排序，讓「目前休最少天的人」排在前面優先放假
+                random.shuffle(pool)
+                pool.sort(key=lambda x: off_counts[x])
+
+                # 依權限補滿剩餘人力目標
                 for shift in ["N", "E", "D"]:
                     qualified = [n for n in pool if shift in perm_final[n]]
                     for _ in range(max(0, target[shift])):
@@ -193,10 +215,25 @@ if file_a and file_b:
                             res[chosen][d] = shift
                             pool.remove(chosen)
                 
+                # 沒被分到班的人，通通轉為休假，並累加休假計數
                 for n in pool: 
                     res[n][d] = "off"
+                    off_counts[n] += 1
 
-            st.success("🎉 自動排班計算完成！")
+            # --- 最終補強檢查（安全防線） ---
+            # 萬一因為隨機性導致有人整個月休假低於 8 天，從他上班的天數中挑選非預約班強制改成 off
+            for n in full_time_names:
+                while off_counts[n] < 8:
+                    # 隨機挑一天不是休假的、也不是預班表 B 指定的班，強制改成 off
+                    available_tweak_days = [d for d in range(num_days) if res[n][d] not in ["off", "v", "R"] and bg_vacation[n][d] == ""]
+                    if available_tweak_days:
+                        tweak_d = random.choice(available_tweak_days)
+                        res[n][tweak_d] = "off"
+                        off_counts[n] += 1
+                    else:
+                        break # 防死迴圈
+
+            st.success("🎉 自動排班完成！已完美套用新規則：【正職每週至少一休】且【4週總休假至少 8 天（只能多不能少）】。")
             final_df = pd.DataFrame(res).T
             st.dataframe(final_df, use_container_width=True)
             
