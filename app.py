@@ -125,7 +125,7 @@ def schedule_part_time(num_days):
         if idx < num_days: backup_days[idx] = "D"
     return backup_days
 
-st.title("🏥 2F 護理排班系統 (下月無縫接軌完全體)")
+st.title("🏥 2F 護理排班系統 ")
 
 # --- 3. 側邊欄日期設定 ---
 with st.sidebar:
