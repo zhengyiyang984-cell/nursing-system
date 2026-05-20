@@ -225,4 +225,84 @@ if file_a and file_b and num_days > 0:
 
                     for shift in ["N", "E", "D"]:
                         qualified = [n for n in pool if shift in perm_final[n]]
-                        for _ in range(max
+                        # 【精準修復行】補齊括號與冒號，解決括號未閉合導致的 SyntaxError
+                        for _ in range(max(0, target[shift])):
+                            if qualified:
+                                chosen = qualified.pop(0)
+                                res[chosen][d] = shift
+                                if chosen in pool: pool.remove(chosen)
+                            else:
+                                valid_month = False 
+                    
+                    for n in pool:
+                        res[n][d] = "off"
+                        total_off_counts[n] += 1
+                        
+                if valid_month and all(total_off_counts[n] >= 8 for n in full_time_names):
+                    final_res = res
+                    success_schedule = True
+                    break
+            
+            if not success_schedule:
+                st.error("⚠️ 無法滿足每日4D/3E/2N人力的限制下算出每人8休。請放寬權限或重試。")
+            else:
+                st.success("🎉 排班大成功！")
+                
+                # 建立班表 DataFrame
+                final_df = pd.DataFrame(final_res).T
+                final_df.columns = date_headers
+                
+                # 橫向統計總天數
+                def count_off_days(row):
+                    return sum(1 for cell in row if str(cell).lower() in ["off", "v", "r"])
+                final_df["總休假天數"] = final_df.apply(count_off_days, axis=1)
+                
+                # 建立縱向各班別總人數統計
+                stat_rows = {}
+                for header in date_headers:
+                    col_data = final_df[header]
+                    count_d = sum(1 for cell in col_data if str(cell).upper() == "D")
+                    count_e = sum(1 for cell in col_data if str(cell).upper() == "E")
+                    count_n = sum(1 for cell in col_data if str(cell).upper() == "N")
+                    
+                    stat_rows[header] = {
+                        "白班 (4人)": count_d,
+                        "小夜 (3人)": count_e,
+                        "大夜 (2人)": count_n
+                    }
+                df_stats = pd.DataFrame(stat_rows)
+                
+                # 網頁端呈現核對
+                st.subheader("🎉 最終排班結果")
+                st.dataframe(final_df, use_container_width=True)
+                
+                st.markdown("### 📊 每日各班別總人數核對")
+                st.table(df_stats)
+                
+                # 合併班表與每日人數核對到同一個 Excel 表格下載
+                export_df = final_df.copy()
+                empty_row = pd.Series([None] * len(export_df.columns), index=export_df.columns)
+                
+                df_stats_extended = df_stats.copy()
+                df_stats_extended["總休假天數"] = "" 
+                
+                download_df = pd.concat([
+                    export_df,
+                    pd.DataFrame([empty_row, empty_row], columns=export_df.columns), 
+                    pd.DataFrame([["--- 每日人力總人數核對 ---"] + [""] * (len(export_df.columns)-1)], columns=export_df.columns), 
+                    df_stats_extended
+                ])
+
+                out = BytesIO()
+                with pd.ExcelWriter(out) as w: 
+                    download_df.to_excel(w, sheet_name="2F綜合建議班表")
+                    
+                st.download_button(
+                    label="📥 下載【班表+每日核對】合併 Excel 檔", 
+                    data=out.getvalue(), 
+                    file_name=f"2F_Schedule_With_Stats_{start_date}.xlsx",
+                    use_container_width=True
+                )
+
+    except Exception as e:
+        st.error(f"系統執行失敗: {e}")
