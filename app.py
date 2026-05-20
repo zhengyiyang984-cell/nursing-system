@@ -10,11 +10,12 @@ st.set_page_config(page_title="2F 護理排班系統-接軌完全體", layout="w
 # 中文星期對照表
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# --- 1. 背景解析與格式防呆 ---
+# --- 1. 背景解析與格式防呆（終極升級：相容手動預班表，自動逆向推算月底接續狀態） ---
 def get_staff_configs(file):
     df = pd.read_excel(file, header=None)
     configs = {}
     
+    # 1. 定位標頭行 (姓名或職級所在的列)
     start_row = 0
     for r in range(min(15, len(df))):
         row_str = "".join(str(v) for v in df.iloc[r].values)
@@ -24,6 +25,7 @@ def get_staff_configs(file):
 
     headers_row = df.iloc[start_row].tolist()
     
+    # 偵測是否有新版系統導出的隱藏統計欄位
     hist_col_idx = -1
     streak_col_idx = -1
     for idx, h in enumerate(headers_row):
@@ -31,6 +33,7 @@ def get_staff_configs(file):
         if "系統接續_最後班別" in h_str: hist_col_idx = idx
         if "系統接續_連續天數" in h_str: streak_col_idx = idx
 
+    # 2. 逐列地毯式白名單讀取人員
     for i in range(start_row + 1, len(df)):
         row = df.iloc[i]
         if len(row) < 3: continue
@@ -39,8 +42,9 @@ def get_staff_configs(file):
         c1 = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
         c2 = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
         
+        # 【強力融斷】排除底部的每日人數統計雜訊列
         combined_text = f"{c0}{c1}{c2}"
-        if any(k in combined_text for k in ["---", "每日人力", "總人數", "核對", "白班", "小夜", "大夜", "下月接續", "統計"]):
+        if any(k in combined_text for k in ["---", "每日人力", "總人數", "核對", "白班", "小夜", "大夜", "下月接續", "統計", "合計"]):
             continue
         if "星期" in combined_text or "姓名" in combined_text:
             continue
@@ -49,6 +53,7 @@ def get_staff_configs(file):
         target_label = ""
         staff_name = ""
         
+        # 巡邏前三欄找出人員序號與半職標籤
         for cell_val in [c0, c1, c2]:
             clean_cell = cell_val.replace(".0", "")
             if clean_cell.isdigit() and 1 <= int(clean_cell) <= 13:
@@ -63,6 +68,7 @@ def get_staff_configs(file):
         if not is_valid_staff:
             continue
 
+        # 逆向解析出真正的姓名
         for cell_val in [c2, c1, c0]:
             if cell_val and not cell_val.replace(".0", "").isdigit() and "半職" not in cell_val and cell_val != "nan":
                 staff_name = cell_val
@@ -72,6 +78,7 @@ def get_staff_configs(file):
         display_label = str(target_label)
         is_pt = "半職" in display_label
         
+        # 智慧判定同仁的原始排班權限
         pure_perm = "DEN"
         for p_check in [c0, c1]:
             p_check_upper = p_check.upper()
@@ -79,27 +86,43 @@ def get_staff_configs(file):
                 pure_perm = p_check_upper
                 break
 
+        # 3. 跨月對齊核心：全自動逆向推算月底最後一天班別
         last_day = "off"
         loaded_streak = 0
 
+        # 情況 A：如果是新版導出檔，直接抓右側隱藏欄位
         if hist_col_idx != -1 and hist_col_idx < len(row) and pd.notna(row.iloc[hist_col_idx]):
             last_day = str(row.iloc[hist_col_idx]).strip()
         if streak_col_idx != -1 and streak_col_idx < len(row) and pd.notna(row.iloc[streak_col_idx]):
             try: loaded_streak = int(float(row.iloc[streak_col_idx]))
             except: loaded_streak = 0
             
+        # 情況 B：如果是手動預班表，自動往左巡邏第 3 欄之後的所有儲存格，精準撈出最後一天的班別
         if last_day == "off" and loaded_streak == 0:
-            valid_cells = [str(c).strip().upper() for c in row.values[3:] if pd.notna(c) and str(c).strip().upper() in ["D", "E", "N", "OFF", "V", "R"]]
-            if valid_cells:
-                pure_shifts = [c for c in valid_cells if c in ["D", "E", "N", "OFF", "V", "R"] and not c.isdigit()][:31]
-                if pure_shifts:
-                    last_c = pure_shifts[-1]
-                    last_day = last_c if last_c in ["D", "E", "N", "R"] else last_c.lower()
+            # 撈出該同仁整列中所有有效的班別格子，並將手動常見的符號（如斜線、開會、受訓、特休）防呆過濾
+            raw_cells = [str(c).strip().upper() for c in row.values[3:] if pd.notna(c)]
+            valid_shifts = []
+            for cell in raw_cells:
+                if cell in ["D", "E", "N", "OFF", "V", "R"]:
+                    valid_shifts.append(cell)
+                elif any(k in cell for k in ["休", "假", "會", "訓", "●", "0"]): # 手動表格的請假變形
+                    valid_shifts.append("OFF")
+            
+            if valid_shifts:
+                # 限制只看前 31 天的日曆儲存格，排除右側可能存在的橫向加總統計干擾
+                pure_month_shifts = valid_shifts[:31]
+                if pure_month_shifts:
+                    last_c = pure_month_shifts[-1]
+                    # 轉化為系統標準班別字串
+                    last_day = last_c if last_c in ["D", "E", "N"] else "off"
                     
+                    # 逆向推算月底連續上班天數
                     s_count = 0
-                    for cell_val in reversed(pure_shifts):
-                        if cell_val in ["D", "E", "N"]: s_count += 1
-                        else: break
+                    for cell_val in reversed(pure_month_shifts):
+                        if cell_val in ["D", "E", "N"]:
+                            s_count += 1
+                        else:
+                            break
                     loaded_streak = s_count
 
         if last_day not in ["D", "E", "N", "off", "v", "R"]: last_day = "off"
@@ -161,7 +184,7 @@ with st.sidebar:
         st.error("⚠️ 錯誤：結束日期不能早於開始日期！")
         num_days = 0
 
-    file_a = st.file_uploader("1. 上傳【班表】(檔案 A - 支援直接投入上月結果)", type=["xlsx"])
+    file_a = st.file_uploader("1. 上傳【班表】(檔案 A - 支援直接投入上月結果/手動預班表)", type=["xlsx"])
     file_b = st.file_uploader("2. 上傳【預班表】(檔案 B)", type=["xlsx"])
 
 if file_a and file_b and num_days > 0:
@@ -211,7 +234,6 @@ if file_a and file_b and num_days > 0:
             next_month_history_row = {}
             next_month_streak_row = {}
             
-            # 提高算力至 1500 次，並分級解鎖
             for attempt in range(1500):
                 valid_month = True
                 res = {str(n): [""] * num_days for n in display_names}
@@ -243,15 +265,15 @@ if file_a and file_b and num_days > 0:
                             if res[n][d-1] in ["off", "v", "R"]:
                                 streak_tracker[n] = 0
 
-                    # 勞基法過勞：強迫 5 連班斷班
+                    # 5連班斷班
                     for n in pool.copy():
                         if streak_tracker[n] >= 5: 
                             res[n][d] = "off"
                             total_off_counts[n] += 1
                             if n in pool: pool.remove(n)
 
-                    # 【智慧保底開關】：前 600 次極致阻斷單天班；若因假太密集死鎖，後續回合允許動態出班
-                    if attempt < 600:
+                    # 全視角即時碎班阻斷防線
+                    if attempt < 500:
                         for n in pool.copy():
                             prev_is_off = (res[n][d-1] in ["off", "v", "R"]) if d > 0 else (history_final[n] in ["off", "v", "R"])
                             next_must_off = (bg_vacation[n][d+1] == "R") if d < (num_days - 1) else False
@@ -294,7 +316,7 @@ if file_a and file_b and num_days > 0:
 
                     if not valid_month: break
 
-                    # 動態融斷降級人力核對（防止遇到請假潮導致當天正職 pool 乾涸）
+                    # 動態融斷降級人力核對
                     needed_slots = sum(max(0, target[s]) for s in ["N", "E", "D"])
                     if len(pool) < needed_slots:
                         while len(pool) < (target["N"] + target["E"] + target["D"]):
@@ -330,15 +352,14 @@ if file_a and file_b and num_days > 0:
                         res[n][d] = "off"
                         total_off_counts[n] += 1
                         
-                # 最終嚴格碎班字串抽查（前 600 次不妥協）
-                if valid_month and attempt < 600:
+                # 最終單天班大檢驗
+                if valid_month and attempt < 500:
                     for n in full_time_names:
                         days_str = "".join(["0" if res[n][x] in ["off", "v", "R"] else "1" for x in range(num_days)])
                         if "010" in days_str or days_str.startswith("10") or days_str.endswith("01"):
                             valid_month = False
                             break
 
-                # 只要符合基本休假天數，便判定成功出表！
                 if valid_month and all(total_off_counts[n] >= 7 for n in full_time_names):
                     final_res = {str(k): v for k, v in res.items()}
                     for n in display_names:
@@ -354,12 +375,14 @@ if file_a and file_b and num_days > 0:
                     break
             
             if not success_schedule or not final_res:
-                st.error("⚠️ 當前各人員的預約假過於密集，請微調預班表再按一次！")
+                st.error("⚠️ 當前各人員的預約假過於密集。在死鎖每日4D/3E/2N人力與『正職不上單天班』的法規限制下本輪未能配出。請再次點擊按鈕重試，或微調預班表再按一次！")
             else:
                 st.success("🎉 排班大成功！已啟動智慧防線順暢出表（兼顧預約假、大夜隔開2天與休假規範）。")
                 
-                final_df = pd.DataFrame(final_res).T              
+                final_df = pd.DataFrame(final_res) 
+                final_df = final_df.T              
                 final_df.columns = date_headers    
+                
                 final_df.index = final_df.index.astype(str)
                 str_display_names = [str(n) for n in display_names]
                 
@@ -401,7 +424,7 @@ if file_a and file_b and num_days > 0:
                     download_df.to_excel(w, sheet_name="2F綜合建議班表")
                     
                 st.download_button(
-                    label="📥 下載【智慧優化完全體】合併 Excel 檔", 
+                    label="📥 下載【高階連班優化完全體】合併 Excel 檔", 
                     data=out.getvalue(), 
                     file_name=f"2F_Schedule_Final_{start_date}.xlsx",
                     use_container_width=True
