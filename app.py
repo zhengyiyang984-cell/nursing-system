@@ -12,7 +12,7 @@ import re
 
 
 
-st.set_page_config(page_title="2F 護理排班系統-接軌完全體", layout="wide")
+st.set_page_config(page_title="2F 護理排班系統", layout="wide")
 
 
 
@@ -336,7 +336,7 @@ def schedule_part_time(num_days):
 
 
 
-st.title("🏥 2F 護理排班系統 (智慧衝關完全體)")
+st.title("🏥 護理排班系統 ")
 
 
 
@@ -370,9 +370,9 @@ with st.sidebar:
 
 
 
-    file_a = st.file_uploader("1. 上傳【班表】(檔案 A - 支援直接投入上月結果/手動預班表)", type=["xlsx"])
+    file_a = st.file_uploader("1. 上傳【班表】", type=["xlsx"])
 
-    file_b = st.file_uploader("2. 上傳【預班表】(檔案 B)", type=["xlsx"])
+    file_b = st.file_uploader("2. 上傳【預班表】", type=["xlsx"])
 
 
 
@@ -418,7 +418,7 @@ if file_a and file_b and num_days > 0:
 
 
 
-        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員（跨月數據鏈已完全就緒）。")
+        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員。")
 
 
 
@@ -756,7 +756,7 @@ if file_a and file_b and num_days > 0:
 
             else:
 
-                st.success("🎉 排班大成功！已啟動智慧防線順暢出表（兼顧預約假、大夜隔開2天與休假規範）。")
+                st.success("🎉 排班成功。")
 
                 
 
@@ -850,7 +850,7 @@ if file_a and file_b and num_days > 0:
 
                 st.download_button(
 
-                    label="📥 下載【高階連班優化完全體】合併 Excel 檔", 
+                    label="📥 下載 Excel 檔", 
 
                     data=out.getvalue(), 
 
