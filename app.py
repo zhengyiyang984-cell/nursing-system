@@ -149,7 +149,17 @@ if file_a and file_b:
        # --- 啟動大型主循環 ---
         if st.button("🚀 啟動精準 4/3/2 排班", type="primary", use_container_width=True):
             # [原有的排班邏輯保持不變，直到 success_schedule 變數產生]
+            if st.button("🚀 啟動精準 4/3/2 排班", type="primary", use_container_width=True):
+            # --- 【關鍵修改】在迴圈外先定義變數 ---
+            success_schedule = False 
+            final_res = {}
+            next_month_history_row, next_month_streak_row = {}, {}
+            # ------------------------------------
+
+            ft_off_target = 9 if num_days >= 31 else 8
+            revoked_log = []
             
+            # 接下來才是你原本的 for attempt in range(3000): 迴圈...
             # --- 以下替換原本的渲染邏輯 ---
             if not success_schedule or not final_res:
                 st.error("⚠️ 錯誤：在維持正職每人剛好休 8/9 天、且半職精準只上 10 天白班的鐵律下大死鎖。請點擊上方按鈕再次啟動重試！")
