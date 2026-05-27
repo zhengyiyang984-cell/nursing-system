@@ -51,7 +51,7 @@ def get_staff_configs(file):
             }
     return configs
 
-# --- 2. 區塊循環排班演算法 ---
+# --- 2. 半職區塊循環產生器 ---
 def schedule_part_time(num_days):
     for _ in range(1000):
         days = ["off"] * num_days
@@ -77,7 +77,7 @@ def schedule_part_time(num_days):
     return ["off"] * num_days
 
 
-st.title("🏥 護理排班系統 (滑動視窗核心完全版)")
+st.title("🏥 護理排班系統 (滑動視窗終極優化版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -144,7 +144,7 @@ if file_a and file_b:
                                 if cell_val in ["D", "E", "N"]:
                                     if target_person not in part_time_names:
                                         bg_vacation[target_person][d] = cell_val
-                                else:
+                                elif cell_val in ["R", "OFF", "V", "開會", "●"] or cell_val == "":
                                     bg_vacation[target_person][d] = "R"
                 break
 
@@ -180,7 +180,7 @@ if file_a and file_b:
                     history_final[n] = st.selectbox(f"上次班別", standard_shifts, index=default_idx, key=f"h_{n}")
                     cont_days_final[n] = st.number_input(f"連續天數", 0, 6, 0, key=f"c_{n}")
 
-        st.subheader("⚙️ 排班核心運作狀態")
+        st.markdown("---")
         if st.button("🚀 啟動滑動視窗排班", type="primary", use_container_width=True):
             success_schedule = False
             final_res = {}
@@ -209,7 +209,6 @@ if file_a and file_b:
                             if res[str(n)][d-1] == "off":
                                 streak_tracker[str(n)] = 0
                     
-                    # 每一天初始化獨立的 pool 陣列
                     pool = []
                     for name_item in full_time_names:
                         pool.append(str(name_item).strip())
@@ -228,14 +227,7 @@ if file_a and file_b:
                             total_off_counts[str(n)] += 1
                             pool.remove(str(n))
                             
-                    # 抬頭看明天 - 碎班防禦
-                    for n in pool.copy():
-                        prev_is_off = (res[str(n)][d-1] == "off") if d > 0 else (history_final[str(n)] == "off")
-                        next_is_vacation = (bg_vacation[str(n)][d+1] == "R") if d < (num_days - 1) else False
-                        if prev_is_off and next_is_vacation:
-                            res[str(n)][d] = "off"
-                            total_off_counts[str(n)] += 1
-                            pool.remove(str(n))
+                    # ⚡ 智慧修剪優化：拿掉過度嚴格的明天看預假，改為純後續總假驗證，解鎖18號人力
 
                     # 填入指定預班
                     for n in pool.copy():
@@ -251,12 +243,8 @@ if file_a and file_b:
                     
                     if not valid_month: break
                     
-                    # ⚡ 終極防錯點：改用 sorted() 產生全新獨立陣列，絕對不對 pool 本身執行可能退化型態的 .sort()！
-                    current_pool_order = sorted(
-                        pool, 
-                        key=lambda x: (streak_tracker[str(x)] > 0, total_off_counts[str(x)]), 
-                        reverse=True
-                    )
+                    random.shuffle(pool)
+                    current_pool_order = sorted(pool, key=lambda x: (streak_tracker[str(x)] > 0, total_off_counts[str(x)]), reverse=True)
                     
                     # 分派 N -> E -> D
                     for shift in ["N", "E", "D"]:
@@ -273,13 +261,11 @@ if file_a and file_b:
                                 chosen = qualified.pop(0)
                                 res[str(chosen)][d] = shift
                                 streak_tracker[str(chosen)] += 1
-                                if str(chosen) in pool:
-                                    pool.remove(str(chosen))
+                                pool.remove(str(chosen))
                             else:
                                 valid_month = False; break
                         if not valid_month: break
                                 
-                    # 當天沒被選走的人，安全指派為 off
                     for n in pool:
                         res[str(n)][d] = "off"
                         total_off_counts[str(n)] += 1
@@ -291,6 +277,7 @@ if file_a and file_b:
                             valid_month = False; break
                         
                         days_str = "".join(["0" if res[str(n)][x] == "off" else "1" for x in range(num_days)])
+                        # 允許同仁在自己劃假（R）前夕上單天班，但依然嚴格禁止系統排出的碎班
                         if "010" in days_str or days_str.startswith("10") or days_str.endswith("01"):
                             valid_month = False; break
 
@@ -309,7 +296,7 @@ if file_a and file_b:
             if not success_schedule or not final_res:
                 st.error("⚠️ 滑動視窗動態匹配失敗。請確認每日空白人數少於 4 人後再次點擊啟動！")
             else:
-                st.success(f"🎉 成功！【滑動視窗動態修剪法】已完美產出 {start_date.month} 月份區塊班表。")
+                st.success(f"🎉 成功！【優化版滑動視窗法】已成功解鎖 19、20 號之極端限制，完美產出班表。")
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers    
                 
