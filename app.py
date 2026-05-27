@@ -90,11 +90,8 @@ if file_a and file_b:
             df_b = pd.read_excel(file_b, sheet_name=sheet_name, header=None)
             # ... 後續處理邏輯 ...
             found_sheet = True
-            break
-            
-    except Exception as e:
-        # 錯誤處理統一放在最後
-        st.error(f"系統解析錯誤: {e}")
+            break 
+
             df_b = pd.read_excel(file_b, sheet_name=sheet_name, header=None)
             
             name_col_idx = 1       
