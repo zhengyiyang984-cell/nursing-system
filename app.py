@@ -77,7 +77,7 @@ def schedule_part_time(num_days):
     return ["off"] * num_days
 
 
-st.title("🏥 護理排班系統 (滑動視窗終極解鎖版)")
+st.title("🏥 護理排班系統 (滑動視窗完美運行版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -198,7 +198,8 @@ if file_a and file_b:
                             if res[n][d-1] == "off":
                                 streak_tracker[n] = 0
                     
-                    pool = [n for n in full_time_names]
+                    # ⚡ 關鍵修復點：確保 pool 內全部都是乾淨的正職員工姓名文字，防止被數字序號污染
+                    pool = [str(n) for n in full_time_names]
                     
                     # 5連班斷班
                     for n in pool.copy():
@@ -238,6 +239,7 @@ if file_a and file_b:
                     if not valid_month: break
                     
                     random.shuffle(pool)
+                    # 依據連班狀態與請假數進行滑動排序
                     pool.sort(key=lambda x: (streak_tracker[x] > 0, total_off_counts[x]), reverse=True)
                     
                     # 分派 N -> E -> D
@@ -247,7 +249,7 @@ if file_a and file_b:
                             if shift in perm_final[n]:
                                 prev_1 = res[n][d-1] if d > 0 else history_final[n]
                                 if shift == "D" and prev_1 in ["N", "E"]: continue
-                                if shift == "E" and prev_1 == "N"]: continue
+                                if shift == "E" and prev_1 == "N": continue
                                 qualified.append(n)
                                 
                         for _ in range(max(0, target[shift])):
@@ -295,7 +297,6 @@ if file_a and file_b:
                 
                 final_df["總休假天數"] = final_df.apply(lambda row: sum(1 for c in row if str(c).lower() in ["off", "v", "r"]), axis=1)
                 
-                # ⚡ 終極修正防線：改用安全比對，絕不使用容易出錯的 .index() 函數
                 last_day_list = []
                 for n in display_names:
                     raw_last = next_month_history_row[n]
