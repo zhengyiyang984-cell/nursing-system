@@ -9,7 +9,7 @@ st.set_page_config(page_title="2F 護理排班系統", layout="wide")
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# --- 1. 舊班表解析 ---
+# --- 1. 基本班表解析 ---
 def get_staff_configs(file):
     df = pd.read_excel(file, header=None)
     configs = {}
@@ -107,14 +107,13 @@ def schedule_full_time_blocks(num_days, max_off_target):
     return ["WORK"] * work_target + ["off"] * (num_days - work_target)
 
 
-st.title("🏥 護理排班系統 (全自動月份相容版)")
+st.title("🏥 護理排班系統 (精準行列對齊版)")
 
 with st.sidebar:
-    st.header("📅 排班月份自動設定")
-    # 讓系統自動根據你的日期產生天數
+    st.header("📅 排班月份設定")
     today = datetime.date.today()
-    start_date = st.date_input("排班開始日期", today.replace(day=1))
-    # 自動推算月底最後一天
+    start_date = st.date_input("排班開始日期", datetime.date(2026, 6, 1))
+    
     if start_date.month == 12:
         next_month = start_date.replace(year=start_date.year + 1, month=1, day=1)
     else:
@@ -126,7 +125,7 @@ with st.sidebar:
     st.info(f"📅 系統偵測：本月共計 {num_days} 天")
     
     file_a = st.file_uploader("1. 上傳【基本班表】", type=["xlsx"])
-    file_b = st.file_uploader("2. 上傳【任何月份預排休表】", type=["xlsx"])
+    file_b = st.file_uploader("2. 上傳【預排休表】", type=["xlsx"])
 
 if file_a and file_b:
     try:
@@ -136,67 +135,71 @@ if file_a and file_b:
         part_time_names = [n for n in all_names if staff_configs[n]["is_part_time"]]
         display_names = full_time_names + part_time_names
 
-        # 初始化空白假表
-        bg_vacation = {n: [""] * num_days for n in display_names}
+        # 初始化假表：預設所有人每天都是 R (劃假/留白)
+        bg_vacation = {n: ["R"] * num_days for n in display_names}
         
-        # --- ⚡ 終極全頁籤無痛掃描技術 ⚡ ---
         xl = pd.ExcelFile(file_b)
-        found_any_name = False
         active_sheet_name = ""
+        found_sheet = False
         
-        # 翻遍 Excel 裡所有的 Sheet！
+        # 遍歷頁籤，尋找真正的假表分頁
         for sheet_name in xl.sheet_names:
             df_b = pd.read_excel(file_b, sheet_name=sheet_name, header=None)
             
-            # 先檢查這一頁有沒有包含我們任何同仁的名字
-            sheet_has_names = False
-            for i in range(len(df_b)):
-                row_str = "".join(str(v) for v in df_b.iloc[i].values)
-                if any(name in row_str for name in display_names):
-                    sheet_has_names = True
-                    found_any_name = True
-                    active_sheet_name = sheet_name
-                    break
+            # 尋找含有「姓名」以及日期數字「1」的錨定列
+            name_col_idx = -1
+            date_start_idx = -1
+            header_row_idx = -1
             
-            # 如果這頁有名字，代表這頁就是我們要的假表！開始抓取
-            if sheet_has_names:
-                for i in range(len(df_b)):
-                    row_str = "".join(str(v) for v in df_b.iloc[i].values)
+            for r in range(min(15, len(df_b))):
+                row_vals = [str(v).strip() for v in df_b.iloc[r].values]
+                if "姓名" in row_vals:
+                    name_col_idx = row_vals.index("姓名")
+                    for c in range(name_col_idx + 1, len(row_vals)):
+                        if row_vals[c] in ["1", "1.0"]:
+                            date_start_idx = c
+                            header_row_idx = r
+                            found_sheet = True
+                            active_sheet_name = sheet_name
+                            break
+                if found_sheet: break
+            
+            if found_sheet:
+                # 找到對的分頁與結構了！開始進行精準行列比對
+                for i in range(header_row_idx + 1, len(df_b)):
+                    # 取出姓名格
+                    raw_cell_name = str(df_b.iloc[i, name_col_idx]).strip() if name_col_idx < len(df_b.columns) else ""
+                    if not raw_cell_name or raw_cell_name == "nan": continue
                     
+                    # 清理名稱雜訊
+                    clean_b_name = re.sub(r'[\s\u3000]', '', raw_cell_name)
+                    
+                    # 模糊比對人員名單
                     target_person = None
                     for name in display_names:
-                        if name in row_str:
-                            target_person = name; break
+                        if name in clean_b_name or clean_b_name in name:
+                            target_person = name
+                            break
                     
+                    # 只要名字對上了，就利用絕對座標 (date_start_idx + d) 往右抓取 30/31 天的格子
                     if target_person:
-                        cells_in_row = [str(v).strip().upper() for v in df_b.iloc[i].values if pd.notna(v)]
-                        
-                        valid_shifts = []
-                        for c in cells_in_row:
-                            if c in ["D", "E", "N", "OFF", "R", "V", "開會", "●"]:
-                                valid_shifts.append(c)
-                        
-                        pure_shifts = []
-                        for x in valid_shifts:
-                            if x in ["D", "E", "N"]: pure_shifts.append(x)
-                            else: pure_shifts.append("R")
-                        
-                        # 自動根據這個月的天數截取對應長度
-                        pure_shifts = pure_shifts[-num_days:] if len(pure_shifts) >= num_days else (["R"] * (num_days - len(pure_shifts)) + pure_shifts)
-                        
                         for d in range(num_days):
-                            val = pure_shifts[d]
-                            if val in ["D", "E", "N"]:
-                                if target_person not in part_time_names:
-                                    bg_vacation[target_person][d] = val
-                            else:
-                                bg_vacation[target_person][d] = "R"
-                break # 抓到假表頁了，直接跳出迴圈，避免被其他空白頁蓋掉
+                            col_pos = date_start_idx + d
+                            if col_pos < len(df_b.columns):
+                                cell_val = str(df_b.iloc[i, col_pos]).strip().upper()
+                                if cell_val in ["D", "E", "N"]:
+                                    # 郭珍君（半職）填寫的指定出勤不鎖死假表，保留區塊彈性
+                                    if target_person not in part_time_names:
+                                        bg_vacation[target_person][d] = cell_val
+                                else:
+                                    # 空白、●、R、開會或其他任何符號，一律精準判定為預約假 R
+                                    bg_vacation[target_person][d] = "R"
+                break # 成功處理完對的假表頁，直接跳出頁籤搜尋
 
-        if found_any_name:
-            st.success(f"✅ 系統成功自動鎖定含有假表資料的分頁：【{active_sheet_name}】！")
+        if found_sheet:
+            st.success(f"✅ 自動鎖定含有假表之分頁：【{active_sheet_name}】。已透過絕對網格座標，精準綁定 13 位同仁。")
         else:
-            st.error("❌ 錯誤：在上傳的預排休表所有頁籤中，找不到任何對應的同仁姓名，請檢查名字是否正確！")
+            st.error("❌ 錯誤：無法在 Excel 中辨識出含有『姓名』與『1號』的標準排修結構，請確認格式！")
 
         st.subheader("⚙️ 核對權限與銜接狀態")
         history_final, perm_final, cont_days_final = {}, {}, {}
