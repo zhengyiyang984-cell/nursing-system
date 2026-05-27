@@ -9,7 +9,7 @@ st.set_page_config(page_title="2F 護理排班系統", layout="wide")
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# 2F 全科室標準 13 人核心真名白名單 (用來核對基本班表與預排休)
+# 2F 全科室標準 13 人核心真名白名單
 CORE_STAFF_NAMES = [
     "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
     "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
@@ -21,45 +21,33 @@ def get_staff_configs(file):
     df = pd.read_excel(file, header=None)
     configs = {}
     
-    # 逐行地毯式白名單搜尋
     for i in range(len(df)):
         row_str = "".join(str(v) for v in df.iloc[i].values)
-        
-        # 排除統計、合計、核對等雜訊行
         if any(k in row_str for k in ["---", "每日人力", "總人數", "核對", "統計", "合計"]):
             continue
             
-        # 檢查這一行有沒有包含 13 人白名單中的任何一個名字
         matched_name = None
         for name in CORE_STAFF_NAMES:
             if name in row_str:
-                matched_name = name
-                break
+                matched_name = name; break
                 
         if matched_name:
-            # 找到了對應的人！開始抓取她這一行的權限班別
             row_cells = [str(v).strip() for v in df.iloc[i].values if pd.notna(v)]
             row_cells_upper = [c.upper() for c in row_cells]
             
-            # 預設權限
             pure_perm = "DEN"
             for cell in row_cells_upper:
-                # 排除單純的數字或序號，找尋包含 D/E/N 的權限字串
                 if any(s in cell for s in ["D", "E", "N"]) and not cell.replace(".0", "").isdigit() and len(cell) <= 4:
                     if cell in ["DEN", "DE", "EN", "DN", "D", "E", "N"]:
-                        pure_perm = cell
-                        break
+                        pure_perm = cell; break
             
             is_pt = (matched_name == "郭珍君")
-            
-            # 固定指派預設值，防堵下拉選單 ValueError
             configs[matched_name] = {
                 "perm": pure_perm,
-                "last_day": "off", # 預設切回 off
+                "last_day": "off",
                 "streak": 0,
                 "is_part_time": is_pt
             }
-            
     return configs
 
 # --- 2. 區塊循環排班演算法 ---
@@ -110,7 +98,7 @@ def schedule_full_time_blocks(num_days, max_off_target):
     return ["WORK"] * work_target + ["off"] * (num_days - work_target)
 
 
-st.title("🏥 護理排班系統 (白名單精準解鎖版)")
+st.title("🏥 護理排班系統 (純區塊完美產出版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -126,7 +114,6 @@ with st.sidebar:
 
 if file_a and file_b:
     try:
-        # 載入基本班表設定
         staff_configs = get_staff_configs(file_a)
         all_names = list(staff_configs.keys())
         full_time_names = [n for n in all_names if not staff_configs[n]["is_part_time"]]
@@ -140,18 +127,16 @@ if file_a and file_b:
         active_sheet_name = ""
         found_sheet = False
         
-        # 遍歷頁籤，自動跳過規範說明頁
         for sheet_name in xl.sheet_names:
             if any(k in sheet_name for k in ["規範", "說明", "填寫", "使用", "欄位"]):
                 continue
                 
             df_b = pd.read_excel(file_b, sheet_name=sheet_name, header=None)
             
-            name_col_idx = 1       # 固定第二欄為姓名
-            date_start_idx = 2     # 固定第三欄為 1 號
+            name_col_idx = 1       
+            date_start_idx = 2     
             header_row_idx = 0     
             
-            # 精準網格定位確認
             for r in range(min(10, len(df_b))):
                 vals = [str(v).strip() for v in df_b.iloc[r].values]
                 if "姓名" in vals:
@@ -163,14 +148,12 @@ if file_a and file_b:
                     break
                     
             if found_sheet:
-                # 抓取假表
                 for i in range(header_row_idx + 1, len(df_b)):
                     raw_cell_name = str(df_b.iloc[i, name_col_idx]).strip()
                     if not raw_cell_name or raw_cell_name == "nan" or "序號" in raw_cell_name: continue
                     
                     clean_b_name = re.sub(r'[\s\u3000]', '', raw_cell_name)
                     
-                    # 用白名單去勾稽假表端的名字
                     target_person = None
                     for name in display_names:
                         if name in clean_b_name:
@@ -198,7 +181,6 @@ if file_a and file_b:
         cols = st.columns(4)
         
         standard_shifts = ["D", "E", "N", "off", "v", "R"]
-        
         for i, n in enumerate(display_names):
             with cols[i % 4]:
                 with st.container(border=True):
@@ -273,13 +255,21 @@ if file_a and file_b:
                                 valid_month = False; break
                         if not valid_month: break
                                 
+                    # ⚡ 核心修正防線：清理池子裡沒被分派班別卻帶有 WORK 骨架的同仁，強制作為安全清洗
                     for n in pool:
-                        if target["D"] > 0: res[n][d] = "D"; target["D"] -= 1
-                        else: valid_month = False
+                        if target["D"] > 0: 
+                            res[n][d] = "D"
+                            target["D"] -= 1
+                        else:
+                            # 人力爆滿或死鎖時，安全清除為 off
+                            res[n][d] = "off"
+                            total_off_counts[n] += 1
 
                 if valid_month:
                     for n in full_time_names:
-                        if total_off_counts[n] != ft_off_target: valid_month = False; break
+                        # ⚡ 雙重防線：最後檢查，確保 res 的陣列裡完全不殘留 "WORK" 或空白字串，有殘留則判定此輪失敗
+                        if total_off_counts[n] != ft_off_target or "WORK" in res[n] or "" in res[n]: 
+                            valid_month = False; break
 
                 if valid_month:
                     final_res = {k: v for k, v in res.items()}
@@ -294,9 +284,9 @@ if file_a and file_b:
                     break
             
             if not success_schedule or not final_res:
-                st.error("⚠️ 原始區塊條件極度嚴格。請確保預排休表中每日空白放假人數控制在 4 人以內（不含郭珍君），調整後再次重試！")
+                st.error("⚠️ 原始區塊條件極度嚴格。在不打破『正職2-5天/半職2-3天』且絕不上單天碎班的鐵律下，本輪嘗試未能配出。請檢查預排休表中是否有某些日子大家集體劃假（超過4人以上），微調錯開後就能順暢產出！")
             else:
-                st.success(f"🎉 {start_date.month}月份班表成功產出！")
+                st.success(f"🎉 {start_date.month}月份純區塊建議班表已完美噴出！")
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers    
                 
