@@ -67,21 +67,33 @@ with st.sidebar:
     file_b = st.file_uploader("2. 上傳【預排休表】", type=["xlsx"])
 
 if file_a and file_b:
-    try:
-        # 1. 初始化設定 (這部分保持你的邏輯)
-        staff_configs = get_staff_configs(file_a)
-        # ... (讀取資料的代碼) ...
+        try:
+            # 1. 讀取與處理
+            staff_configs = get_staff_configs(file_a)
+            all_names = list(staff_configs.keys())
+            full_time_names = [str(n) for n in all_names if not staff_configs[n]["is_part_time"]]
+            part_time_names = [str(n) for n in all_names if staff_configs[n]["is_part_time"]]
+            display_names = full_time_names + part_time_names
 
-        # 2. 啟動排班按鈕
-        if st.button("🚀 啟動精準 4/3/2 排班", type="primary", use_container_width=True):
-            # 你的排班演算法代碼放在這裡
-            # ...
-            # 你的排班渲染代碼放在這裡
+            bg_vacation = {n: [""] * num_days for n in display_names}
             
-    except Exception as e:
-        # 這是整個 if file_a and file_b 區塊的結尾
-        st.error(f"系統解析錯誤: {e}")
+            # 2. 讀取 Excel
+            xl = pd.ExcelFile(file_b)
+            found_sheet = False
+            for sheet_name in xl.sheet_names:
+                if any(k in sheet_name for k in ["規範", "說明", "填寫", "使用", "欄位"]):
+                    continue
+                # (你原本處理 sheet 的邏輯請維持在這裡)
+                found_sheet = True
+                break
 
+            # 3. 顯示排班介面 (這是你原本的邏輯區塊)
+            st.subheader("⚙️ 核對權限與銜接狀態")
+            # ... 你的其他 UI 邏輯 ...
+
+        except Exception as e:
+            # 這一段與 try 對齊，確保錯誤能被捕捉
+            st.error(f"系統解析錯誤: {e}")
             df_b = pd.read_excel(file_b, sheet_name=sheet_name, header=None)
             
             name_col_idx = 1       
