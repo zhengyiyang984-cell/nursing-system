@@ -73,14 +73,14 @@ if file_a and file_b:
         full_time_names = [str(n) for n in all_names if not staff_configs[n]["is_part_time"]]
         part_time_names = [str(n) for n in all_names if staff_configs[n]["is_part_time"]]
         display_names = full_time_names + part_time_names
-
+    except Exception as e:
+        st.error(f"系統解析錯誤: {e}")
         bg_vacation = {n: [""] * num_days for n in display_names}
         
         xl = pd.ExcelFile(file_b)
         active_sheet_name = "未指定分頁" 
         found_sheet = False
-        except Exception as e:
-        st.error(f"系統運行錯誤: {e}")
+       
         for sheet_name in xl.sheet_names:
             if any(k in sheet_name for k in ["規範", "說明", "填寫", "使用", "欄位"]):
                 continue
