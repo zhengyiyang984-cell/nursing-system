@@ -291,18 +291,49 @@ if file_a and file_b:
 
     except Exception as e:
         st.error(f"系統解析錯誤: {e}")
-# [這是您的最終穩定版代碼結構]
+import streamlit as st
+import pandas as pd
+from io import BytesIO
 
-# 1. 核心重點：把所有規則變成『可動態調整的權重』
-# 當人數不足時，系統會自動在「符合規則」與「人數達標」之間選擇後者
-def get_best_shift(d, n, pool, target, prev_shift):
-    # 這裡的邏輯改為：如果在大塞車日(19-22)，放寬限制
-    if d in critical_days:
-        return select_shift_soft(prev_shift)
+# --- 核心邏輯：只做統計，絕不瞎猜 ---
+def generate_schedule_strict(display_names, num_days, bg_vacation, perm_final):
+    # 建立一個基礎結果表
+    res = {n: ["off"] * num_days for n in display_names}
+    
+    # 1. 優先填入 CSV 裡的預排班別
+    for n in display_names:
+        for d in range(num_days):
+            if bg_vacation[n][d] in ["D", "E", "N"]:
+                res[n][d] = bg_vacation[n][d]
+            else:
+                res[n][d] = "off"
+    
+    # 2. 進行統計檢查，絕不自動補歪
+    daily_stats = []
+    for d in range(num_days):
+        d_count = sum(1 for n in display_names if res[n][d] == "D")
+        e_count = sum(1 for n in display_names if res[n][d] == "E")
+        n_count = sum(1 for n in display_names if res[n][d] == "N")
+        
+        # 這裡不進行自動補位，直接存下結果與目標的落差
+        daily_stats.append({
+            "day": d + 1,
+            "D": d_count, "E": e_count, "N": n_count,
+            "is_valid": (d_count == 4 and e_count == 3 and n_count == 2)
+        })
+    
+    return res, daily_stats
+
+# --- 在排班按鈕觸發後 ---
+if st.button("🚀 產出臨床真實排班表"):
+    res, stats = generate_schedule_strict(display_names, num_days, bg_vacation, perm_final)
+    
+    # 檢查是否有任何一天不符合 4/3/2
+    invalid_days = [s for s in stats if not s['is_valid']]
+    if invalid_days:
+        st.error("❌ 每日人數未對齊 4/3/2，請調整預排休表！")
+        for day in invalid_days:
+            st.write(f"第 {day['day']} 天：白班 {day['D']} 人、小夜 {day['E']} 人、大夜 {day['N']} 人 (目標 4/3/2)")
     else:
-        return select_shift_strict(prev_shift)
-
-# 2. 徹底移除任何壞掉的保底
-# 如果迴圈跑完 5000 次都沒人手，直接拋出錯誤提醒，絕不輸出歪掉的表格
-if not success_schedule:
-    st.error("⚠️ 調整後的預排假表造成人力配置極端困難，請確認『請假人數是否超過 4 人』，並適度調整同仁預約班別！")
+        st.success("🎉 人數完美對齊！")
+        # 產出 Excel ...
