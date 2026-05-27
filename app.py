@@ -220,7 +220,7 @@ if file_a and file_b:
                     # 4. 剩餘人員強制休假
                     for n in pool.copy():
                         res[str(n)][d] = "off"
-                        total_off_counts[str(n)] += 1
+                        total_off_counts[str(n)] += 1  # 確保這行的縮排與上面那行完全對齊
                         pool.remove(n)
                     # --- [替換邏輯結束] ---
                                     total_off_counts[str(n)] += 1
