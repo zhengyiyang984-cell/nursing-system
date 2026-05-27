@@ -50,7 +50,7 @@ def get_staff_configs(file):
             }
     return configs
 
-# --- 2. 區塊循環排班演算法（半職保留，正職改為滑動視窗動態法） ---
+# --- 2. 區塊循環排班演算法 ---
 def schedule_part_time(num_days):
     for _ in range(1000):
         days = ["off"] * num_days
@@ -101,7 +101,7 @@ if file_a and file_b:
         bg_vacation = {n: ["R"] * num_days for n in display_names}
         
         xl = pd.ExcelFile(file_b)
-        active_sheet_name = ""
+        active_sheet_name = "未指定分頁" # ⚡ 關鍵修正：在迴圈前先給予預設值，徹底封殺 UnboundLocalError
         found_sheet = False
         
         for sheet_name in xl.sheet_names:
@@ -121,7 +121,7 @@ if file_a and file_b:
                     date_start_idx = name_col_idx + 1
                     header_row_idx = r
                     found_sheet = True
-                    active_sheet_name = sheet_name
+                    active_sheet_name = sheet_name # ⚡ 精準賦值
                     break
                     
             if found_sheet:
@@ -175,28 +175,23 @@ if file_a and file_b:
             next_month_history_row, next_month_streak_row = {}, {}
             ft_off_target = 9 if num_days >= 31 else 8
             
-            # 滑動視窗動態修剪法求解迴圈
-            for attempt in range(1000):
+            for attempt in range(2500):
                 valid_month = True
                 res = {k: ["off"] * num_days for k in display_names}
                 
-                # 半職獨立排 10 天
                 for pt_name in part_time_names: 
                     res[pt_name] = schedule_part_time(num_days)
                     
                 total_off_counts = {n: 0 for n in full_time_names}
                 streak_tracker = {n: 0 for n in full_time_names}
                 
-                # ⚡ 核心演算法：滑動視窗逐日動態前進 ⚡
                 for d in range(num_days):
                     if not valid_month: break
                     
-                    # 每日目標人數
                     target = {"D": 4, "E": 3, "N": 2}
                     for pt_name in part_time_names:
                         if res[pt_name][d] == "D": target["D"] -= 1
                     
-                    # 重置昨天的連班狀態
                     if d > 0:
                         for n in full_time_names:
                             if res[n][d-1] == "off":
@@ -204,22 +199,21 @@ if file_a and file_b:
                     
                     pool = [n for n in full_time_names]
                     
-                    # 【修剪防線 1：強制滿 5 連班斷班】
+                    # 5連班斷班
                     for n in pool.copy():
                         if streak_tracker[n] >= 5:
                             res[n][d] = "off"
                             total_off_counts[n] += 1
                             pool.remove(n)
                             
-                    # 【修剪防線 2：核對同仁預約假（R）】
+                    # 處理預約假
                     for n in pool.copy():
                         if bg_vacation[n][d] == "R":
                             res[n][d] = "off"
                             total_off_counts[n] += 1
                             pool.remove(n)
                             
-                    # 【修剪防線 3：抬頭看明天 - 碎班防禦】
-                    # 如果今天被抓來上班，而「明天是預約假」，且「昨天是休假」，今天就不能上單天班，必須提前一起休！
+                    # 抬頭看明天 - 碎班防禦
                     for n in pool.copy():
                         prev_is_off = (res[n][d-1] == "off") if d > 0 else (history_final[n] == "off")
                         next_is_vacation = (bg_vacation[n][d+1] == "R") if d < (num_days - 1) else False
@@ -228,7 +222,7 @@ if file_a and file_b:
                             total_off_counts[n] += 1
                             pool.remove(n)
 
-                    # 【修剪防線 4：填入同仁自己指定的預班】
+                    # 填入指定預班
                     for n in pool.copy():
                         v = bg_vacation[n][d]
                         if v in ["D", "E", "N"]:
@@ -242,18 +236,17 @@ if file_a and file_b:
                     
                     if not valid_month: break
                     
-                    # 智慧滑動視窗排序：正在連班中的人優先繼續排上班（形成區塊）、假休太多的人也優先拉出來上班
                     random.shuffle(pool)
                     pool.sort(key=lambda x: (streak_tracker[x] > 0, total_off_counts[x]), reverse=True)
                     
-                    # 依序分派 N -> E -> D
+                    # 分派 N -> E -> D
                     for shift in ["N", "E", "D"]:
                         qualified = []
                         for n in pool:
                             if shift in perm_final[n]:
                                 prev_1 = res[n][d-1] if d > 0 else history_final[n]
                                 if shift == "D" and prev_1 in ["N", "E"]: continue
-                                if shift == "E" and prev_1 == "N": continue
+                                if shift == "E" and prev_1 == "N"]: continue
                                 qualified.append(n)
                                 
                         for _ in range(max(0, target[shift])):
@@ -266,12 +259,11 @@ if file_a and file_b:
                                 valid_month = False; break
                         if not valid_month: break
                                 
-                    # 當天沒被分配到班的人，全部進修假
                     for n in pool:
                         res[n][d] = "off"
                         total_off_counts[n] += 1
 
-                # 月底大驗證：檢查總休假是否為 8/9 天、且完全無單天碎班
+                # 月底大驗證
                 if valid_month:
                     for n in full_time_names:
                         if total_off_counts[n] != ft_off_target: 
