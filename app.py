@@ -43,15 +43,10 @@ def get_staff_configs(file):
                         pure_perm = cell; break
             
             is_pt = (matched_name == "郭珍君")
-            
-            # 讀取原本班表的接續班別與連續天數（若有欄位的話）
-            last_day_val = "off"
-            streak_val = 0
-            
             configs[matched_name] = {
                 "perm": pure_perm,
-                "last_day": last_day_val,
-                "streak": streak_val,
+                "last_day": "off",
+                "streak": 0,
                 "is_part_time": is_pt
             }
     return configs
@@ -82,7 +77,7 @@ def schedule_part_time(num_days):
     return ["off"] * num_days
 
 
-st.title("🏥 護理排班系統 (滑動視窗終極流暢版)")
+st.title("🏥 護理排班系統 (滑動視窗終極解鎖版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -100,8 +95,8 @@ if file_a and file_b:
     try:
         staff_configs = get_staff_configs(file_a)
         all_names = list(staff_configs.keys())
-        full_time_names = [n for n in all_names if not staff_configs[n]["is_part_time"]]
-        part_time_names = [n for n in all_names if staff_configs[n]["is_part_time"]]
+        full_time_names = [str(n) for n in all_names if not staff_configs[n]["is_part_time"]]
+        part_time_names = [str(n) for n in all_names if staff_configs[n]["is_part_time"]]
         display_names = full_time_names + part_time_names
 
         bg_vacation = {n: ["R"] * num_days for n in display_names}
@@ -171,17 +166,16 @@ if file_a and file_b:
                     perm_final[n] = raw_perm.strip().upper().replace(",", "").replace(" ", "")
                     if not perm_final[n]: perm_final[n] = "DEN"
                     
-                    # ⚡ 核心修復點：將讀取到的歷史班別強制轉換為小寫，並加上安全過濾機制，避免大小寫不對盤
                     raw_last_day = str(staff_configs[n]["last_day"]).strip().lower()
                     if raw_last_day == "off" or raw_last_day not in ["d", "e", "n", "v", "r"]:
                         raw_last_day = "off"
                     else:
-                        raw_last_day = raw_last_day.upper() # D, E, N 轉大寫對齊清單
+                        raw_last_day = raw_last_day.upper()
                         
                     if raw_last_day in standard_shifts:
                         default_idx = standard_shifts.index(raw_last_day)
                     else:
-                        default_idx = 3 # 萬無一失的預設值：off
+                        default_idx = 3
                         
                     history_final[n] = st.selectbox(f"上次班別", standard_shifts, index=default_idx, key=f"h_{n}")
                     cont_days_final[n] = st.number_input(f"連續天數", 0, 6, 0, key=f"c_{n}")
@@ -195,111 +189,115 @@ if file_a and file_b:
             
             for attempt in range(2500):
                 valid_month = True
-                res = {k: ["off"] * num_days for k in display_names}
+                res = {str(k): ["off"] * num_days for k in display_names}
                 
                 for pt_name in part_time_names: 
-                    res[pt_name] = schedule_part_time(num_days)
+                    res[str(pt_name)] = schedule_part_time(num_days)
                     
-                total_off_counts = {n: 0 for n in full_time_names}
-                streak_tracker = {n: int(cont_days_final[n]) for n in full_time_names}
+                total_off_counts = {str(n): 0 for n in full_time_names}
+                streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
                 
                 for d in range(num_days):
                     if not valid_month: break
                     
                     target = {"D": 4, "E": 3, "N": 2}
                     for pt_name in part_time_names:
-                        if res[pt_name][d] == "D": target["D"] -= 1
+                        if res[str(pt_name)][d] == "D": target["D"] -= 1
                     
                     if d > 0:
                         for n in full_time_names:
-                            if res[n][d-1] == "off":
-                                streak_tracker[n] = 0
+                            if res[str(n)][d-1] == "off":
+                                streak_tracker[str(n)] = 0
                     
-                    pool = [str(n) for n in full_time_names]
+                    # ⚡ 核心修正防線：每一天初始化池子時，強制將名單全部封鎖為純文字字串型態
+                    pool = []
+                    for name_item in full_time_names:
+                        pool.append(str(name_item).strip())
                     
                     # 5連班斷班
                     for n in pool.copy():
-                        if streak_tracker[n] >= 5:
-                            res[n][d] = "off"
-                            total_off_counts[n] += 1
-                            pool.remove(n)
+                        if streak_tracker[str(n)] >= 5:
+                            res[str(n)][d] = "off"
+                            total_off_counts[str(n)] += 1
+                            pool.remove(str(n))
                             
                     # 處理預約假
                     for n in pool.copy():
-                        if bg_vacation[n][d] == "R":
-                            res[n][d] = "off"
-                            total_off_counts[n] += 1
-                            pool.remove(n)
+                        if bg_vacation[str(n)][d] == "R":
+                            res[str(n)][d] = "off"
+                            total_off_counts[str(n)] += 1
+                            pool.remove(str(n))
                             
                     # 抬頭看明天 - 碎班防禦
                     for n in pool.copy():
-                        prev_is_off = (res[n][d-1] == "off") if d > 0 else (history_final[n] == "off")
-                        next_is_vacation = (bg_vacation[n][d+1] == "R") if d < (num_days - 1) else False
+                        prev_is_off = (res[str(n)][d-1] == "off") if d > 0 else (history_final[str(n)] == "off")
+                        next_is_vacation = (bg_vacation[str(n)][d+1] == "R") if d < (num_days - 1) else False
                         if prev_is_off and next_is_vacation:
-                            res[n][d] = "off"
-                            total_off_counts[n] += 1
-                            pool.remove(n)
+                            res[str(n)][d] = "off"
+                            total_off_counts[str(n)] += 1
+                            pool.remove(str(n))
 
                     # 填入指定預班
                     for n in pool.copy():
-                        v = bg_vacation[n][d]
+                        v = bg_vacation[str(n)][d]
                         if v in ["D", "E", "N"]:
-                            if target[v] > 0 and v in perm_final[n]:
-                                res[n][d] = v
+                            if target[v] > 0 and v in perm_final[str(n)]:
+                                res[str(n)][d] = v
                                 target[v] -= 1
-                                streak_tracker[n] += 1
-                                pool.remove(n)
+                                streak_tracker[str(n)] += 1
+                                pool.remove(str(n))
                             else:
                                 valid_month = False
                     
                     if not valid_month: break
                     
                     random.shuffle(pool)
-                    pool.sort(key=lambda x: (streak_tracker[x] > 0, total_off_counts[x]), reverse=True)
+                    # 排序時也嚴格套用 str(x) 進行映射，阻絕任何索引退化
+                    pool.sort(key=lambda x: (streak_tracker[str(x)] > 0, total_off_counts[str(x)]), reverse=True)
                     
                     # 分派 N -> E -> D
                     for shift in ["N", "E", "D"]:
                         qualified = []
                         for n in pool:
-                            if shift in perm_final[n]:
-                                prev_1 = res[n][d-1] if d > 0 else history_final[n]
+                            if shift in perm_final[str(n)]:
+                                prev_1 = res[str(n)][d-1] if d > 0 else history_final[str(n)]
                                 if shift == "D" and prev_1 in ["N", "E"]: continue
                                 if shift == "E" and prev_1 == "N": continue
-                                qualified.append(n)
+                                qualified.append(str(n))
                                 
                         for _ in range(max(0, target[shift])):
                             if qualified:
                                 chosen = qualified.pop(0)
-                                res[chosen][d] = shift
-                                streak_tracker[chosen] += 1
-                                pool.remove(chosen)
+                                res[str(chosen)][d] = shift
+                                streak_tracker[str(chosen)] += 1
+                                pool.remove(str(chosen))
                             else:
                                 valid_month = False; break
                         if not valid_month: break
                                 
                     for n in pool:
-                        res[n][d] = "off"
-                        total_off_counts[n] += 1
+                        res[str(n)][d] = "off"
+                        total_off_counts[str(n)] += 1
 
                 # 月底大驗證
                 if valid_month:
                     for n in full_time_names:
-                        if total_off_counts[n] != ft_off_target: 
+                        if total_off_counts[str(n)] != ft_off_target: 
                             valid_month = False; break
                         
-                        days_str = "".join(["0" if res[n][x] == "off" else "1" for x in range(num_days)])
+                        days_str = "".join(["0" if res[str(n)][x] == "off" else "1" for x in range(num_days)])
                         if "010" in days_str or days_str.startswith("10") or days_str.endswith("01"):
                             valid_month = False; break
 
                 if valid_month:
-                    final_res = {k: v for k, v in res.items()}
+                    final_res = {str(k): v for k, v in res.items()}
                     for n in display_names:
-                        next_month_history_row[n] = str(res[n][-1])
+                        next_month_history_row[str(n)] = str(res[str(n)][-1])
                         s_count = 0
-                        for cell_b in reversed(res[n]):
+                        for cell_b in reversed(res[str(n)]):
                             if cell_b in ["D", "E", "N"]: s_count += 1
                             else: break
-                        next_month_streak_row[n] = s_count
+                        next_month_streak_row[str(n)] = s_count
                     success_schedule = True
                     break
             
@@ -314,14 +312,14 @@ if file_a and file_b:
                 
                 last_day_list = []
                 for n in display_names:
-                    raw_last = next_month_history_row[n]
+                    raw_last = next_month_history_row[str(n)]
                     if raw_last in ["D", "E", "N"]:
                         last_day_list.append(raw_last)
                     else:
                         last_day_list.append("off")
                         
                 final_df["系統接續_最後班別"] = last_day_list
-                final_df["系統接續_連續天數"] = [next_month_streak_row[n] for n in display_names]
+                final_df["系統接續_連續天數"] = [next_month_streak_row[str(n)] for n in display_names]
                 
                 st.dataframe(final_df, use_container_width=True)
                 
