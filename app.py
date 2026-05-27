@@ -107,18 +107,12 @@ def schedule_full_time_blocks(num_days, max_off_target):
     return ["WORK"] * work_target + ["off"] * (num_days - work_target)
 
 
-st.title("🏥 護理排班系統 (多重安全防護版)")
+st.title("🏥 護理排班系統 (精準網格對齊版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
-    today = datetime.date.today()
     start_date = st.date_input("排班開始日期", datetime.date(2026, 6, 1))
-    
-    if start_date.month == 12:
-        next_month = start_date.replace(year=start_date.year + 1, month=1, day=1)
-    else:
-        next_month = start_date.replace(month=start_date.month + 1, day=1)
-    end_date = st.date_input("排班結束日期", next_month - datetime.timedelta(days=1))
+    end_date = st.date_input("排班結束日期", datetime.date(2026, 6, 30))
     
     num_days = (end_date - start_date).days + 1
     date_headers = [f"{d.month}/{d.day} ({WEEKDAYS_CHINESE[d.weekday()]})" for d in [(start_date + datetime.timedelta(days=x)) for x in range(num_days)]]
@@ -142,71 +136,66 @@ if file_a and file_b:
         active_sheet_name = ""
         found_sheet = False
         
-        # 遍歷頁籤，尋找真正的假表分頁
+        # 遍歷頁籤，自動過濾掉規範說明頁
         for sheet_name in xl.sheet_names:
-            # ⚡ 安全鎖一：如果頁籤名字看起來是說明文字，直接跳過，絕不點進去！
             if any(k in sheet_name for k in ["規範", "說明", "填寫", "使用", "欄位"]):
                 continue
                 
             df_b = pd.read_excel(file_b, sheet_name=sheet_name, header=None)
             
-            name_col_idx = 2  # 預設為第三欄 (C欄)
-            date_start_idx = 3 # 預設為第四欄 (D欄)
-            header_row_idx = 0
+            # --- ⚡ 終極精準定位：完全配合您目前的預排休表 ⚡ ---
+            name_col_idx = 1       # B 欄固定為姓名 (欄位索引 1)
+            date_start_idx = 2     # C 欄固定為 1 號起點 (欄位索引 2)
+            header_row_idx = 0     # 第一列固定為標頭
             
-            # 尋找含有「姓名」以及日期數字「1」的錨定列
-            for r in range(min(15, len(df_b))):
-                row_vals = [str(v).strip() for v in df_b.iloc[r].values]
-                if "姓名" in row_vals:
-                    name_col_idx = row_vals.index("姓名")
-                    # ⚡ 安全鎖二：用 try-except 包起來，就算 index 找不到 1，也只會走備用方案，絕對不當機！
-                    try:
-                        for c in range(name_col_idx + 1, len(row_vals)):
-                            if row_vals[c] in ["1", "1.0"]:
-                                date_start_idx = c
-                                header_row_idx = r
-                                found_sheet = True
-                                active_sheet_name = sheet_name
-                                break
-                    except ValueError:
-                        # 找不到 1 就用預設的第 4 欄
-                        date_start_idx = 3
+            # 簡單做個安全確認，看看第一列有沒有包含姓名，如果有的話就直接咬定這張表
+            row_zero_vals = [str(v).strip() for v in df_b.iloc[0].values]
+            if "姓名" in row_zero_vals or any(n in "".join(row_zero_vals) for n in display_names):
+                found_sheet = True
+                active_sheet_name = sheet_name
+            else:
+                # 防呆：如果最上面有空行，地毯式往下掃描前 5 列找標頭
+                for r in range(min(5, len(df_b))):
+                    vals = [str(v).strip() for v in df_b.iloc[r].values]
+                    if "姓名" in vals:
+                        name_col_idx = vals.index("姓名")
+                        date_start_idx = name_col_idx + 1
                         header_row_idx = r
                         found_sheet = True
                         active_sheet_name = sheet_name
                         break
-                if found_sheet: break
             
             if found_sheet:
-                # 開始精準行列抓取假表
+                # 開始精準提取
                 for i in range(header_row_idx + 1, len(df_b)):
                     raw_cell_name = str(df_b.iloc[i, name_col_idx]).strip() if name_col_idx < len(df_b.columns) else ""
-                    if not raw_cell_name or raw_cell_name == "nan": continue
+                    if not raw_cell_name or raw_cell_name == "nan" or "序號" in raw_cell_name: continue
                     
                     clean_b_name = re.sub(r'[\s\u3000]', '', raw_cell_name)
                     
                     target_person = None
                     for name in display_names:
                         if name in clean_b_name or clean_b_name in name:
-                            target_person = name
-                            break
+                            target_person = name; break
                     
                     if target_person:
                         for d in range(num_days):
                             col_pos = date_start_idx + d
                             if col_pos < len(df_b.columns):
                                 cell_val = str(df_b.iloc[i, col_pos]).strip().upper()
+                                # 如果有寫具體上班班別 (D/E/N)，且不是郭珍君（半職），就鎖定預班
                                 if cell_val in ["D", "E", "N"]:
                                     if target_person not in part_time_names:
                                         bg_vacation[target_person][d] = cell_val
                                 else:
+                                    # 留白、R、●、開會，通通算預約假 R
                                     bg_vacation[target_person][d] = "R"
                 break
 
         if found_sheet:
-            st.success(f"✅ 自動排除說明干擾，成功鎖定正確假表分頁：【{active_sheet_name}】。")
+            st.success(f"✅ 自動鎖定正確假表分頁：【{active_sheet_name}】。已綁定「B欄為姓名，C欄為1號起點」之網格標準。")
         else:
-            st.error("❌ 錯誤：無法辨識標準排修結構，請確認預排休表格式是否正確！")
+            st.error("❌ 錯誤：無法在 Excel 裡辨識出您的排修結構，請確認預排休表是否包含『姓名』欄位！")
 
         st.subheader("⚙️ 核對權限與銜接狀態")
         history_final, perm_final, cont_days_final = {}, {}, {}
@@ -306,7 +295,7 @@ if file_a and file_b:
                     break
             
             if not success_schedule or not final_res:
-                st.error("⚠️ 區塊條件極度嚴格。請確保每日放假人數小於 4 人後再重新執行！")
+                st.error("⚠️ 原始區塊條件極度嚴格。請確保預排休表中每日空白放假人數控制在 4 人以內（不含郭珍君），調整後再次重試！")
             else:
                 st.success(f"🎉 {start_date.month}月份班表成功產出！")
                 final_df = pd.DataFrame(final_res).T
