@@ -77,7 +77,7 @@ def schedule_part_time(num_days):
     return ["off"] * num_days
 
 
-st.title("🏥 護理排班系統 (滑動視窗終極解鎖版)")
+st.title("💡 護理排班系統 (滑動視窗終極完美版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -209,7 +209,6 @@ if file_a and file_b:
                             if res[str(n)][d-1] == "off":
                                 streak_tracker[str(n)] = 0
                     
-                    # ⚡ 核心修正防線：每一天初始化池子時，強制將名單全部封鎖為純文字字串型態
                     pool = []
                     for name_item in full_time_names:
                         pool.append(str(name_item).strip())
@@ -252,7 +251,6 @@ if file_a and file_b:
                     if not valid_month: break
                     
                     random.shuffle(pool)
-                    # 排序時也嚴格套用 str(x) 進行映射，阻絕任何索引退化
                     pool.sort(key=lambda x: (streak_tracker[str(x)] > 0, total_off_counts[str(x)]), reverse=True)
                     
                     # 分派 N -> E -> D
@@ -310,16 +308,19 @@ if file_a and file_b:
                 
                 final_df["總休假天數"] = final_df.apply(lambda row: sum(1 for c in row if str(c).lower() in ["off", "v", "r"]), axis=1)
                 
+                # ⚡ 終極修正點：改為直接跟 final_df.index 要名字，100% 解決順序錯位引發的 KeyError！
                 last_day_list = []
-                for n in display_names:
+                streak_list = []
+                for n in final_df.index:
                     raw_last = next_month_history_row[str(n)]
                     if raw_last in ["D", "E", "N"]:
                         last_day_list.append(raw_last)
                     else:
                         last_day_list.append("off")
+                    streak_list.append(next_month_streak_row[str(n)])
                         
                 final_df["系統接續_最後班別"] = last_day_list
-                final_df["系統接續_連續天數"] = [next_month_streak_row[str(n)] for n in display_names]
+                final_df["系統接續_連續天數"] = streak_list
                 
                 st.dataframe(final_df, use_container_width=True)
                 
