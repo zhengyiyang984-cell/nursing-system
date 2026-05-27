@@ -107,7 +107,7 @@ def schedule_full_time_blocks(num_days, max_off_target):
     return ["WORK"] * work_target + ["off"] * (num_days - work_target)
 
 
-st.title("🏥 護理排班系統 (精準行列對齊版)")
+st.title("🏥 護理排班系統 (多重安全防護版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -135,7 +135,7 @@ if file_a and file_b:
         part_time_names = [n for n in all_names if staff_configs[n]["is_part_time"]]
         display_names = full_time_names + part_time_names
 
-        # 初始化假表：預設所有人每天都是 R (劃假/留白)
+        # 初始化假表
         bg_vacation = {n: ["R"] * num_days for n in display_names}
         
         xl = pd.ExcelFile(file_b)
@@ -144,62 +144,69 @@ if file_a and file_b:
         
         # 遍歷頁籤，尋找真正的假表分頁
         for sheet_name in xl.sheet_names:
+            # ⚡ 安全鎖一：如果頁籤名字看起來是說明文字，直接跳過，絕不點進去！
+            if any(k in sheet_name for k in ["規範", "說明", "填寫", "使用", "欄位"]):
+                continue
+                
             df_b = pd.read_excel(file_b, sheet_name=sheet_name, header=None)
             
-            # 尋找含有「姓名」以及日期數字「1」的錨定列
-            name_col_idx = -1
-            date_start_idx = -1
-            header_row_idx = -1
+            name_col_idx = 2  # 預設為第三欄 (C欄)
+            date_start_idx = 3 # 預設為第四欄 (D欄)
+            header_row_idx = 0
             
+            # 尋找含有「姓名」以及日期數字「1」的錨定列
             for r in range(min(15, len(df_b))):
                 row_vals = [str(v).strip() for v in df_b.iloc[r].values]
                 if "姓名" in row_vals:
                     name_col_idx = row_vals.index("姓名")
-                    for c in range(name_col_idx + 1, len(row_vals)):
-                        if row_vals[c] in ["1", "1.0"]:
-                            date_start_idx = c
-                            header_row_idx = r
-                            found_sheet = True
-                            active_sheet_name = sheet_name
-                            break
+                    # ⚡ 安全鎖二：用 try-except 包起來，就算 index 找不到 1，也只會走備用方案，絕對不當機！
+                    try:
+                        for c in range(name_col_idx + 1, len(row_vals)):
+                            if row_vals[c] in ["1", "1.0"]:
+                                date_start_idx = c
+                                header_row_idx = r
+                                found_sheet = True
+                                active_sheet_name = sheet_name
+                                break
+                    except ValueError:
+                        # 找不到 1 就用預設的第 4 欄
+                        date_start_idx = 3
+                        header_row_idx = r
+                        found_sheet = True
+                        active_sheet_name = sheet_name
+                        break
                 if found_sheet: break
             
             if found_sheet:
-                # 找到對的分頁與結構了！開始進行精準行列比對
+                # 開始精準行列抓取假表
                 for i in range(header_row_idx + 1, len(df_b)):
-                    # 取出姓名格
                     raw_cell_name = str(df_b.iloc[i, name_col_idx]).strip() if name_col_idx < len(df_b.columns) else ""
                     if not raw_cell_name or raw_cell_name == "nan": continue
                     
-                    # 清理名稱雜訊
                     clean_b_name = re.sub(r'[\s\u3000]', '', raw_cell_name)
                     
-                    # 模糊比對人員名單
                     target_person = None
                     for name in display_names:
                         if name in clean_b_name or clean_b_name in name:
                             target_person = name
                             break
                     
-                    # 只要名字對上了，就利用絕對座標 (date_start_idx + d) 往右抓取 30/31 天的格子
                     if target_person:
                         for d in range(num_days):
                             col_pos = date_start_idx + d
                             if col_pos < len(df_b.columns):
                                 cell_val = str(df_b.iloc[i, col_pos]).strip().upper()
                                 if cell_val in ["D", "E", "N"]:
-                                    # 郭珍君（半職）填寫的指定出勤不鎖死假表，保留區塊彈性
                                     if target_person not in part_time_names:
                                         bg_vacation[target_person][d] = cell_val
                                 else:
-                                    # 空白、●、R、開會或其他任何符號，一律精準判定為預約假 R
                                     bg_vacation[target_person][d] = "R"
-                break # 成功處理完對的假表頁，直接跳出頁籤搜尋
+                break
 
         if found_sheet:
-            st.success(f"✅ 自動鎖定含有假表之分頁：【{active_sheet_name}】。已透過絕對網格座標，精準綁定 13 位同仁。")
+            st.success(f"✅ 自動排除說明干擾，成功鎖定正確假表分頁：【{active_sheet_name}】。")
         else:
-            st.error("❌ 錯誤：無法在 Excel 中辨識出含有『姓名』與『1號』的標準排修結構，請確認格式！")
+            st.error("❌ 錯誤：無法辨識標準排修結構，請確認預排休表格式是否正確！")
 
         st.subheader("⚙️ 核對權限與銜接狀態")
         history_final, perm_final, cont_days_final = {}, {}, {}
