@@ -116,196 +116,58 @@ if file_a and file_b:
         st.markdown("---")
         warning_placeholder = st.container()
         
-        if st.button("🚀 啟動精準 4/3/2 排班", type="primary", use_container_width=True):
-            success_schedule = False
-            final_res = {}
-            next_month_history_row, next_month_streak_row = {}, {}
-            ft_off_target = 9 if num_days >= 31 else 8
-            
-            # 定義戰術區間
-            critical_days = [18, 19, 20, 21]  # 6/19~6/22 索引位置
-            pre_days = [14, 15, 16, 17]        # 前面大休期
-            post_days = [22, 23, 24, 25]       # 後面大休期
-            
-            for attempt in range(5000):
-                valid_month = True
-                res = {str(k): ["off"] * num_days for k in display_names}
-                
-                ironed_vacation = {n: bg_vacation[n].copy() for n in display_names}
-                total_off_counts = {str(n): 0 for n in full_time_names}
-                streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
-                
-                # 找出 19~22 號真正請假（R）的那 4 位正職
-                real_vacation_staff = [n for n in full_time_names if bg_vacation[n][18] == "R" or bg_vacation[n][19] == "R"]
-                combat_staff = [n for n in full_time_names if n not in real_vacation_staff]
-                
-                # 先隨機抽取半職郭珍君的 10 天 D 班位置（優先放入 19~22 號大塞車日）
-                pt_assigned_days = list(critical_days) # 先塞 4 天
-                remaining_pt_needed = 10 - len(pt_assigned_days)
-                other_possible_days = [x for x in range(num_days) if x not in critical_days]
-                random.shuffle(other_possible_days)
-                pt_assigned_days.extend(other_possible_days[:remaining_pt_needed])
-                
-                for pt_day in pt_assigned_days:
-                    for pt_name in part_time_names: res[pt_name][pt_day] = "D"
-                
-                for d in range(num_days):
+      for d in range(num_days):
                     if not valid_month: break
                     
-                    # ⚡ 鋼鐵死鎖：正職同仁每天必須自己精準湊滿 4D / 3E / 2N！絕不扣減！
                     target = {"D": 4, "E": 3, "N": 2}
+                    pool = [str(n) for n in full_time_names]
                     
-                    if d > 0:
-                        for n in full_time_names:
-                            if res[str(n)][d-1] == "off": streak_tracker[str(n)] = 0
-                    
-                    pool = [str(name_item).strip() for name_item in full_time_names]
-                    
-                    # 1. 5連班斷班
-                    if d not in critical_days:
-                        for n in pool.copy():
-                            if streak_tracker[str(n)] >= 5:
-                                res[str(n)][d] = "off"
-                                total_off_counts[str(n)] += 1
-                                pool.remove(str(n))
-                    
-                    # 2. 戰術落實：
-                   # --- [替換邏輯開始] ---
-                    # 1. 5連班斷班檢查
-                    if d > 0:
-                        for n in pool.copy():
-                            if streak_tracker[str(n)] >= 5:
-                                res[str(n)][d] = "off"
-                                total_off_counts[str(n)] += 1
-                                if n in pool: pool.remove(n)
-
-                    # 2. 戰術與預排處理
-                    # 先處理特殊排班需求，確保難排的人優先獲得分配
+                    # 1. 處理特殊休假與連班限制 (優先級最高)
                     for n in pool.copy():
-                        if d in critical_days and n in real_vacation_staff:
-                            res[str(n)][d] = "off"
-                            total_off_counts[str(n)] += 1
-                            if n in pool: pool.remove(n)
-                        elif ironed_vacation[str(n)][d] == "R":
-                            res[str(n)][d] = "off"
-                            total_off_counts[str(n)] += 1
-                            if n in pool: pool.remove(n)
+                        # 5連班斷班
+                        if d > 0 and streak_tracker[n] >= 5:
+                            res[n][d] = "off"
+                            total_off_counts[n] += 1
+                            pool.remove(n)
+                        # 強制預排休 (R)
+                        elif ironed_vacation[n][d] == "R":
+                            res[n][d] = "off"
+                            total_off_counts[n] += 1
+                            pool.remove(n)
+                        # 戰術區間避開
+                        elif d in critical_days and n in real_vacation_staff:
+                            res[n][d] = "off"
+                            total_off_counts[n] += 1
+                            pool.remove(n)
 
-                    # 3. 核心優化：權限優先分配 (貪婪邏輯)
-                    # 權限範圍越小(len)的人越優先，避免最後剩下一堆沒人能上的班別
-                    pool.sort(key=lambda x: len(perm_final[str(x)]))
+                    # 2. 核心分配：優先填入最難排的班 (基於權限長度排序)
+                    pool.sort(key=lambda x: len(perm_final[x]))
                     
-                    # 嘗試填補 D, E, N
                     for shift in ["D", "E", "N"]:
-                        # 篩選出今天可以上此班的人 (權限符合且未在 pool 中被移除)
-                        candidates = [n for n in pool if shift in perm_final[str(n)]]
+                        # 找合適人選
+                        candidates = [n for n in pool if shift in perm_final[n]]
+                        candidates.sort(key=lambda x: streak_tracker[x]) # 避免過勞優先
                         
-                        # 依據連班狀況排序：連班越少的人越優先被選，避免過勞
-                        candidates.sort(key=lambda x: streak_tracker[str(x)])
-
                         while target[shift] > 0 and candidates:
                             chosen = candidates.pop(0)
+                            # 檢查班別銜接 (避免夜班接白班)
+                            prev_1 = res[chosen][d-1] if d > 0 else history_final[chosen]
+                            if d not in critical_days and shift == "D" and prev_1 in ["N", "E"]:
+                                continue
                             
-                            # 檢查連班限制 (如：夜班後接白班)
-                            prev_1 = res[str(chosen)][d-1] if d > 0 else history_final[str(chosen)]
-                            if d not in critical_days:
-                                if shift == "D" and prev_1 in ["N", "E"]: continue
-                                if shift == "E" and prev_1 == "N": continue
-                            
-                            res[str(chosen)][d] = shift
-                            streak_tracker[str(chosen)] += 1
+                            res[chosen][d] = shift
+                            streak_tracker[chosen] += 1
                             pool.remove(chosen)
                             target[shift] -= 1
                     
-                   # 4. 剩餘人員強制休假
-                    for n in pool.copy():
-                        res[str(n)][d] = "off"
-                        total_off_counts[str(n)] += 1
-                        pool.remove(str(n))
-                    # --- [替換邏輯結束] ---
-                        
-                        for n in pool.copy():
-                            if ironed_vacation[str(n)][d] == "R":
-                                res[str(n)][d] = "off"
-                                total_off_counts[str(n)] += 1
-                                pool.remove(str(n))
-
-                    # 3. 指定預班處理
-                    for n in pool.copy():
-                        v = ironed_vacation[str(n)][d]
-                        if v in ["D", "E", "N"]:
-                            if target[v] > 0 and v in perm_final[str(n)]:
-                                res[str(n)][d] = v
-                                target[v] -= 1
-                                streak_tracker[str(n)] += 1
-                                pool.remove(str(n))
-                    
-                    if not valid_month: break
-                    
-                    # 4. 空白正職分派
-                    random.shuffle(pool)
-                    current_pool_order = sorted(pool, key=lambda x: (streak_tracker[str(x)] > 0, total_off_counts[str(x)]), reverse=True)
-                    
-                    for shift in ["N", "E", "D"]:
-                        qualified = []
-                        for n in current_pool_order:
-                            if str(n) in pool and shift in perm_final[str(n)]:
-                                prev_1 = res[str(n)][d-1] if d > 0 else history_final[str(n)]
-                                if d not in critical_days:
-                                    if shift == "D" and prev_1 in ["N", "E"]: continue
-                                    if shift == "E" and prev_1 == "N": continue
-                                qualified.append(str(n))
-                                
-                        for _ in range(max(0, target[shift])):
-                            if qualified:
-                                chosen = qualified.pop(0)
-                                res[str(chosen)][d] = shift
-                                streak_tracker[str(chosen)] += 1
-                                pool.remove(str(chosen))
-                                target[shift] -= 1
-                            else:
-                                if pool:
-                                    fallback = pool.pop(0)
-                                    res[str(fallback)][d] = shift
-                                    streak_tracker[str(fallback)] += 1
-                                    target[shift] -= 1
-                                else:
-                                    valid_month = False; break
-                        if not valid_month: break
-                                
+                    # 3. 處理當天未被選中且無法補齊的人員 (強制休假)
                     for n in pool:
-                        res[str(n)][d] = "off"
-                        total_off_counts[str(n)] += 1
-                        
-                    # 人力精準總核對：只要正職自己當天有任何一班沒配平，此輪報廢！
-                    if target["D"] != 0 or target["E"] != 0 or target["N"] != 0:
+                        res[n][d] = "off"
+                        total_off_counts[n] += 1
+                    
+                    # 4. 如果當天沒湊滿 4/3/2，該月直接失敗重算
+                    if target["D"] > 0 or target["E"] > 0 or target["N"] > 0:
                         valid_month = False
-
-                # 5. 正職總休假天數驗證
-                if valid_month:
-                    for n in full_time_names:
-                        if total_off_counts[str(n)] != ft_off_target: 
-                            valid_month = False; break
-                        
-                        days_str = "".join(["0" if res[str(n)][x] == "off" else "1" for x in range(num_days)])
-                        if "010" in days_str and not any(idx in critical_days for idx, char in enumerate(days_str) if char == "1"):
-                            valid_month = False; break
-
-                if valid_month:
-                    final_res = {str(k): v for k, v in res.items()}
-                    for n in display_names:
-                        next_month_history_row[str(n)] = str(res[str(n)][-1])
-                        s_count = 0
-                        for cell_b in reversed(res[str(n)]):
-                            if cell_b in ["D", "E", "N"]: s_count += 1
-                            else: break
-                        next_month_streak_row[str(n)] = s_count
-                    success_schedule = True; break
-            
-            # --- 網頁渲染與輸出 ---
-            # ⚡ 徹底拔除會損壞數據的壞兜底機制！不成功便印出報錯，保證畫面上人數絕對 100% 正確
-            if not success_schedule or not final_res:
-                st.error("⚠️ 提示：正在為 12 名正職與半職進行深度求解。請再次點擊上方按鈕執行重試解鎖！")
             else:
                 st.success(f"🎉 完美通關！全月每日人數均完美鎖死為『 4白班、3小夜、2大夜』的鋼鐵正職比例（半職外掛空降疊加）！")
                 
