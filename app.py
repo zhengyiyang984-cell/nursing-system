@@ -77,7 +77,7 @@ def schedule_part_time(num_days):
     return ["off"] * num_days
 
 
-st.title("🏥 護理排班系統 (滑動視窗動態修剪版)")
+st.title("🏥 護理排班系統 (滑動視窗終極解鎖版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -277,7 +277,7 @@ if file_a and file_b:
                 if valid_month:
                     final_res = {k: v for k, v in res.items()}
                     for n in display_names:
-                        next_month_history_row[n] = res[n][-1]
+                        next_month_history_row[n] = str(res[n][-1])
                         s_count = 0
                         for cell_b in reversed(res[n]):
                             if cell_b in ["D", "E", "N"]: s_count += 1
@@ -295,8 +295,16 @@ if file_a and file_b:
                 
                 final_df["總休假天數"] = final_df.apply(lambda row: sum(1 for c in row if str(c).lower() in ["off", "v", "r"]), axis=1)
                 
-                # ⚡ 關鍵修正：確保這些統計與資料讀取的 Key 都在 success_schedule 區塊內安全被呼叫
-                final_df["系統接續_最後班別"] = [next_month_history_row[n] for n in display_names]
+                # ⚡ 終極修正防線：改用安全比對，絕不使用容易出錯的 .index() 函數
+                last_day_list = []
+                for n in display_names:
+                    raw_last = next_month_history_row[n]
+                    if raw_last in ["D", "E", "N"]:
+                        last_day_list.append(raw_last)
+                    else:
+                        last_day_list.append("off")
+                        
+                final_df["系統接續_最後班別"] = last_day_list
                 final_df["系統接續_連續天數"] = [next_month_streak_row[n] for n in display_names]
                 
                 st.dataframe(final_df, use_container_width=True)
