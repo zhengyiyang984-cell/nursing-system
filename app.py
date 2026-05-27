@@ -146,14 +146,37 @@ if file_a and file_b:
         
         warning_placeholder = st.container()
         
+       # --- 啟動大型主循環 ---
         if st.button("🚀 啟動精準 4/3/2 排班", type="primary", use_container_width=True):
-            success_schedule = False
-            final_res = {}
-            next_month_history_row, next_month_streak_row = {}, {}
-            ft_off_target = 9 if num_days >= 31 else 8
+            # [原有的排班邏輯保持不變，直到 success_schedule 變數產生]
             
-            revoked_log = []
-            
+            # --- 以下替換原本的渲染邏輯 ---
+            if not success_schedule or not final_res:
+                st.error("⚠️ 錯誤：在維持正職每人剛好休 8/9 天、且半職精準只上 10 天白班的鐵律下大死鎖。請點擊上方按鈕再次啟動重試！")
+            else:
+                if revoked_log:
+                    with warning_placeholder:
+                        for log in revoked_log: st.warning(log)
+                            
+                st.success(f"🎉 完美通關！全月每日均完美對齊『4白班、3小夜、2大夜』標準！")
+                
+                final_df = pd.DataFrame(final_res).T
+                final_df.columns = date_headers    
+                final_df["總休假天數"] = final_df.apply(lambda row: sum(1 for c in row if str(c).lower() in ["off", "v", "r"]), axis=1)
+                
+                # 色彩化樣式函式
+                def style_shifts(df):
+                    def color_map(val):
+                        colors = {'D': '#FFFACD', 'E': '#E0FFFF', 'N': '#E6E6FA', 'off': '#FFD700', 'R': '#D3D3D3'}
+                        return f'background-color: {colors.get(str(val).upper(), "#FFFFFF")}; color: black'
+                    return df.style.applymap(color_map)
+
+                st.dataframe(style_shifts(final_df), use_container_width=True)
+                
+                out = BytesIO()
+                with pd.ExcelWriter(out, engine='xlsxwriter') as w: 
+                    final_df.to_excel(w, sheet_name=f"{start_date.month}月建議班表")
+                st.download_button(label="📥 下載最終 Excel 班表", data=out.getvalue(), file_name=f"2F_Schedule_{start_date.month}M.xlsx", use_container_width=True)
             # 啟動大型主循環
             for attempt in range(3000):
                 valid_month = True
