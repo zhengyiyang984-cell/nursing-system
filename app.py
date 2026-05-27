@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import random
 from io import BytesIO
 import datetime
 
@@ -14,7 +15,7 @@ CORE_STAFF_NAMES = [
 
 st.title("🏥 2F 護理排班系統 (完整整合版)")
 
-# --- 側邊欄：上傳與設定 ---
+# --- 側邊欄設定 ---
 with st.sidebar:
     st.header("⚙️ 設定區")
     start_date = st.date_input("排班開始日期", datetime.date(2026, 6, 1))
@@ -24,7 +25,7 @@ with st.sidebar:
 
 # --- 校對介面 ---
 if file_a and file_b:
-    st.subheader("⚙️ 核對權限與銜接狀態 (手動設定)")
+    st.subheader("⚙️ 核對權限與銜接狀態")
     cols = st.columns(4)
     perm_final, history_final, cont_days_final = {}, {}, {}
     
@@ -39,7 +40,7 @@ if file_a and file_b:
     if st.button("🚀 啟動 14 人完整排班", type="primary", use_container_width=True):
         num_days = (end_date - start_date).days + 1
         
-        # 讀取預排休 (讀取 Excel)
+        # 讀取預排休
         df_vac = pd.read_excel(file_b, header=0)
         vacation_map = {}
         for _, row in df_vac.iterrows():
@@ -47,15 +48,15 @@ if file_a and file_b:
             vacation_map[name] = [str(val).upper() == "R" for val in row.iloc[1:num_days+1]]
 
         res = {n: ["off"] * num_days for n in CORE_STAFF_NAMES}
-        streak = {n: int(cont_days_final[n]) for n in CORE_STAFF_NAMES}
         
+        # 核心迴圈
         for d in range(num_days):
-            # 1. 預排休覆蓋
+            # 1. 處理預排休
             for n in CORE_STAFF_NAMES:
                 if n in vacation_map and len(vacation_map[n]) > d and vacation_map[n][d]:
                     res[n][d] = "off"
             
-            # 2. 郭珍君 (半職) 規則
+            # 2. 郭珍君半職規則
             if d < 10:
                 res["郭珍君"][d] = "D"
             elif res["郭珍君"][d] != "off":
@@ -69,15 +70,13 @@ if file_a and file_b:
             targets = {"D": 4, "E": 3, "N": 2}
             for shift, count in targets.items():
                 for _ in range(count):
-                    # 篩選有權限的人
                     candidates = [n for n in pool if shift in perm_final[n]]
                     if candidates:
                         chosen = candidates[0]
                         res[chosen][d] = shift
                         pool.remove(chosen)
-                        streak[chosen] += 1
             
-            # 5. 其餘補休
+            # 5. 未排到的人補為 off
             for n in pool:
                 res[n][d] = "off"
 
