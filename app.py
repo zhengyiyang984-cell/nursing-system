@@ -7,6 +7,7 @@ import re
 
 st.set_page_config(page_title="2F 護理排班系統", layout="wide")
 
+# 中文星期對照表
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
 # 2F 全科室標準 13 人核心真名白名單
@@ -101,7 +102,7 @@ if file_a and file_b:
         bg_vacation = {n: ["R"] * num_days for n in display_names}
         
         xl = pd.ExcelFile(file_b)
-        active_sheet_name = "未指定分頁" # ⚡ 關鍵修正：在迴圈前先給予預設值，徹底封殺 UnboundLocalError
+        active_sheet_name = "未指定分頁" 
         found_sheet = False
         
         for sheet_name in xl.sheet_names:
@@ -121,7 +122,7 @@ if file_a and file_b:
                     date_start_idx = name_col_idx + 1
                     header_row_idx = r
                     found_sheet = True
-                    active_sheet_name = sheet_name # ⚡ 精準賦值
+                    active_sheet_name = sheet_name 
                     break
                     
             if found_sheet:
@@ -183,7 +184,7 @@ if file_a and file_b:
                     res[pt_name] = schedule_part_time(num_days)
                     
                 total_off_counts = {n: 0 for n in full_time_names}
-                streak_tracker = {n: 0 for n in full_time_names}
+                streak_tracker = {n: int(cont_days_final[n]) for n in full_time_names}
                 
                 for d in range(num_days):
                     if not valid_month: break
@@ -293,6 +294,8 @@ if file_a and file_b:
                 final_df.columns = date_headers    
                 
                 final_df["總休假天數"] = final_df.apply(lambda row: sum(1 for c in row if str(c).lower() in ["off", "v", "r"]), axis=1)
+                
+                # ⚡ 關鍵修正：確保這些統計與資料讀取的 Key 都在 success_schedule 區塊內安全被呼叫
                 final_df["系統接續_最後班別"] = [next_month_history_row[n] for n in display_names]
                 final_df["系統接續_連續天數"] = [next_month_streak_row[n] for n in display_names]
                 
