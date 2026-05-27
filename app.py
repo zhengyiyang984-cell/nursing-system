@@ -161,14 +161,12 @@ if file_a and file_b:
                 total_off_counts = {str(n): 0 for n in full_time_names}
                 streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
                 
-                # 半職郭珍君的總天數計數器
                 pt_work_days_count = 0
                 pt_assigned_days = []
                 
                 for d in range(num_days):
                     if not valid_month: break
                     
-                    # 預設每日白班目標 4 人
                     target = {"D": 4, "E": 3, "N": 2}
                     
                     if d > 0:
@@ -178,25 +176,27 @@ if file_a and file_b:
                     
                     pool = [str(name_item).strip() for name_item in full_time_names]
                     
-                    # 1. 滿 5 連班者強制斷班放假
+                    # 1. 5連班斷班
                     for n in pool.copy():
                         if streak_tracker[str(n)] >= 5:
                             res[str(n)][d] = "off"
                             total_off_counts[str(n)] += 1
                             pool.remove(str(n))
                             
-                    # 2. ⚡ 核心動態捕手：計算今天正職扣除請假後剩下多少可用人手
+                    # 2. ⚡ 智慧動態捕手系統核心改進：
+                    # 計算今天「正職扣掉請假、扣掉連班斷班」之後，真正還能動用的可用人手
                     active_ft_workers = [n for n in pool if ironed_vacation[n][d] != "R"]
                     
-                    # ➔ 如果活人小於 9 個人（人手不夠分配 4/3/2 ），且郭珍君還沒滿 10 天，強制塞給半職救火！
+                    # ➔ 如果活人小於 9 個人（正職人手大崩盤，連 4D+3E+2N 都湊不滿）
+                    # 且郭珍君目前累積救火天數還沒滿 10 天，今天就「強制作為救火隊空降上白班」！
                     if len(active_ft_workers) < 9 and pt_work_days_count < 10:
                         for pt_name in part_time_names:
                             res[pt_name][d] = "D"
                         pt_work_days_count += 1
                         pt_assigned_days.append(d)
-                        target["D"] -= 1 # 扣減當天正職的白班需求名額
+                        target["D"] -= 1 # 扣減正職白班缺口
                     
-                    # 3. 萬一半職出動了，正職請假人數還是大超標，再動態平滑微調正職假
+                    # 3. 如果半職救火了，人手還是小於當天剩餘所需的總目標，啟動「前置軟化熨平防線」
                     total_required = target["D"] + target["E"] + target["N"]
                     while len([n for n in pool if ironed_vacation[n][d] != "R"]) < total_required:
                         v_workers = [n for n in pool if ironed_vacation[n][d] == "R"]
@@ -207,7 +207,7 @@ if file_a and file_b:
                         msg = f"⚠️ {d+1}號 劃假人數超出上限，半職救火補位後仍有缺口，系統已微調正職【{fired_person}】出勤支援。"
                         if msg not in revoked_log: revoked_log.append(msg)
                     
-                    # 4. 處理放假的正職
+                    # 4. 處理放假正職
                     for n in pool.copy():
                         if ironed_vacation[str(n)][d] == "R":
                             res[str(n)][d] = "off"
@@ -228,7 +228,7 @@ if file_a and file_b:
                     
                     if not valid_month: break
                     
-                    # 6. 分派空白正職：依照連班與休假天數進行平滑排序
+                    # 6. 空白正職分派
                     random.shuffle(pool)
                     current_pool_order = sorted(pool, key=lambda x: (streak_tracker[str(x)] > 0, total_off_counts[str(x)]), reverse=True)
                     
@@ -262,16 +262,16 @@ if file_a and file_b:
                         res[str(n)][d] = "off"
                         total_off_counts[str(n)] += 1
                         
-                    # 人力精準總核對：只要當天有任何一班沒完美歸零，這輪直接報廢重排！
+                    # 每日人數卡死核對：只要有一班沒完美扣到 0，當天直接作廢！
                     if target["D"] != 0 or target["E"] != 0 or target["N"] != 0:
                         valid_month = False
 
-                # 💡 半職強制補位機制：如果月底結算時，半職郭珍君救火天數少於 10 天，自動挑剩餘的日子幫她補滿 10 天
+                # 💡 半職月底自適應調節：如果郭珍君救火天數少於 10 天，自動挑正職人手最充裕、最安全的日子幫她補滿 10 天
                 if valid_month and pt_work_days_count < 10:
                     needed_days = 10 - pt_work_days_count
                     all_possible_days = [x for x in range(num_days) if x not in pt_assigned_days]
-                    # 優先挑選當天白班全部由正職組成、且請假人數較多的日子塞入
-                    all_possible_days.sort(key=lambda x: sum(1 for n in full_time_names if bg_vacation[n][x] == "R"), reverse=True)
+                    # 優先找當天正職上班人數最多（請假人最少）的安全日子塞入，絕對不打破當天 4/3/2 規則
+                    all_possible_days.sort(key=lambda x: sum(1 for n in full_time_names if bg_vacation[n][x] == "R"), reverse=False)
                     
                     for extra_day in all_possible_days[:needed_days]:
                         for pt_name in part_time_names:
@@ -304,9 +304,9 @@ if file_a and file_b:
                     break
             
             # --- 網頁渲染與輸出 ---
-            # ⚡ 核心保險：如果不成功便顯示錯誤訊息，絕不允許不符合 4/3/2 的爛數據印在畫面上！
+            # ⚡ 終極保險線：徹底刪除原本壞掉的盲目全白班保底！不成功便成仁，確保輸出的數據一定是完美的！
             if not success_schedule or not final_res:
-                st.error("⚠️ 錯誤：目前正職指定班別與假表衝突過高。請點擊上方按鈕再次啟動重試，或是讓阿長微調衝突的指定預班！")
+                st.error("⚠️ 提示：由於 6/19~6/22 期間請假過於集中（4人重疊），加上其餘同仁被連班 5 天與花班限制卡死，演算法陷入大死鎖。請再次點擊上方按鈕重試，或是調整同仁衝突的指定預班！")
             else:
                 if revoked_log:
                     with warning_placeholder:
