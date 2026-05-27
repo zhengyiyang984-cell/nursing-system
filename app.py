@@ -77,7 +77,7 @@ def schedule_part_time(num_days):
     return ["off"] * num_days
 
 
-st.title("💡 護理排班系統 (滑動視窗終極完美版)")
+st.title("🏥 護理排班系統 (滑動視窗終極完美版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -308,7 +308,7 @@ if file_a and file_b:
                 
                 final_df["總休假天數"] = final_df.apply(lambda row: sum(1 for c in row if str(c).lower() in ["off", "v", "r"]), axis=1)
                 
-                # ⚡ 終極修正點：改為直接跟 final_df.index 要名字，100% 解決順序錯位引發的 KeyError！
+                # ⚡ 終極修正點：改為直接跟 final_df.index 索取人名，100% 解決順序不一致引發的 KeyError！
                 last_day_list = []
                 streak_list = []
                 for n in final_df.index:
