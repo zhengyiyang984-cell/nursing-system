@@ -77,7 +77,7 @@ def schedule_part_time(num_days):
     return ["off"] * num_days
 
 
-st.title("🏥 護理排班系統 (滑動視窗終極完美版)")
+st.title("🏥 護理排班系統 (滑動視窗核心完全版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -180,7 +180,7 @@ if file_a and file_b:
                     history_final[n] = st.selectbox(f"上次班別", standard_shifts, index=default_idx, key=f"h_{n}")
                     cont_days_final[n] = st.number_input(f"連續天數", 0, 6, 0, key=f"c_{n}")
 
-        st.markdown("---")
+        st.subheader("⚙️ 排班核心運作狀態")
         if st.button("🚀 啟動滑動視窗排班", type="primary", use_container_width=True):
             success_schedule = False
             final_res = {}
@@ -209,6 +209,7 @@ if file_a and file_b:
                             if res[str(n)][d-1] == "off":
                                 streak_tracker[str(n)] = 0
                     
+                    # 每一天初始化獨立的 pool 陣列
                     pool = []
                     for name_item in full_time_names:
                         pool.append(str(name_item).strip())
@@ -250,14 +251,18 @@ if file_a and file_b:
                     
                     if not valid_month: break
                     
-                    random.shuffle(pool)
-                    pool.sort(key=lambda x: (streak_tracker[str(x)] > 0, total_off_counts[str(x)]), reverse=True)
+                    # ⚡ 終極防錯點：改用 sorted() 產生全新獨立陣列，絕對不對 pool 本身執行可能退化型態的 .sort()！
+                    current_pool_order = sorted(
+                        pool, 
+                        key=lambda x: (streak_tracker[str(x)] > 0, total_off_counts[str(x)]), 
+                        reverse=True
+                    )
                     
                     # 分派 N -> E -> D
                     for shift in ["N", "E", "D"]:
                         qualified = []
-                        for n in pool:
-                            if shift in perm_final[str(n)]:
+                        for n in current_pool_order:
+                            if str(n) in pool and shift in perm_final[str(n)]:
                                 prev_1 = res[str(n)][d-1] if d > 0 else history_final[str(n)]
                                 if shift == "D" and prev_1 in ["N", "E"]: continue
                                 if shift == "E" and prev_1 == "N": continue
@@ -268,11 +273,13 @@ if file_a and file_b:
                                 chosen = qualified.pop(0)
                                 res[str(chosen)][d] = shift
                                 streak_tracker[str(chosen)] += 1
-                                pool.remove(str(chosen))
+                                if str(chosen) in pool:
+                                    pool.remove(str(chosen))
                             else:
                                 valid_month = False; break
                         if not valid_month: break
                                 
+                    # 當天沒被選走的人，安全指派為 off
                     for n in pool:
                         res[str(n)][d] = "off"
                         total_off_counts[str(n)] += 1
@@ -308,7 +315,6 @@ if file_a and file_b:
                 
                 final_df["總休假天數"] = final_df.apply(lambda row: sum(1 for c in row if str(c).lower() in ["off", "v", "r"]), axis=1)
                 
-                # ⚡ 終極修正點：改為直接跟 final_df.index 索取人名，100% 解決順序不一致引發的 KeyError！
                 last_day_list = []
                 streak_list = []
                 for n in final_df.index:
