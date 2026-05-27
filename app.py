@@ -43,10 +43,15 @@ def get_staff_configs(file):
                         pure_perm = cell; break
             
             is_pt = (matched_name == "郭珍君")
+            
+            # 讀取原本班表的接續班別與連續天數（若有欄位的話）
+            last_day_val = "off"
+            streak_val = 0
+            
             configs[matched_name] = {
                 "perm": pure_perm,
-                "last_day": "off",
-                "streak": 0,
+                "last_day": last_day_val,
+                "streak": streak_val,
                 "is_part_time": is_pt
             }
     return configs
@@ -77,7 +82,7 @@ def schedule_part_time(num_days):
     return ["off"] * num_days
 
 
-st.title("🏥 護理排班系統 (滑動視窗完美運行版)")
+st.title("🏥 護理排班系統 (滑動視窗終極流暢版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -166,7 +171,19 @@ if file_a and file_b:
                     perm_final[n] = raw_perm.strip().upper().replace(",", "").replace(" ", "")
                     if not perm_final[n]: perm_final[n] = "DEN"
                     
-                    history_final[n] = st.selectbox(f"上次班別", standard_shifts, index=3, key=f"h_{n}")
+                    # ⚡ 核心修復點：將讀取到的歷史班別強制轉換為小寫，並加上安全過濾機制，避免大小寫不對盤
+                    raw_last_day = str(staff_configs[n]["last_day"]).strip().lower()
+                    if raw_last_day == "off" or raw_last_day not in ["d", "e", "n", "v", "r"]:
+                        raw_last_day = "off"
+                    else:
+                        raw_last_day = raw_last_day.upper() # D, E, N 轉大寫對齊清單
+                        
+                    if raw_last_day in standard_shifts:
+                        default_idx = standard_shifts.index(raw_last_day)
+                    else:
+                        default_idx = 3 # 萬無一失的預設值：off
+                        
+                    history_final[n] = st.selectbox(f"上次班別", standard_shifts, index=default_idx, key=f"h_{n}")
                     cont_days_final[n] = st.number_input(f"連續天數", 0, 6, 0, key=f"c_{n}")
 
         st.markdown("---")
@@ -198,7 +215,6 @@ if file_a and file_b:
                             if res[n][d-1] == "off":
                                 streak_tracker[n] = 0
                     
-                    # ⚡ 關鍵修復點：確保 pool 內全部都是乾淨的正職員工姓名文字，防止被數字序號污染
                     pool = [str(n) for n in full_time_names]
                     
                     # 5連班斷班
@@ -239,7 +255,6 @@ if file_a and file_b:
                     if not valid_month: break
                     
                     random.shuffle(pool)
-                    # 依據連班狀態與請假數進行滑動排序
                     pool.sort(key=lambda x: (streak_tracker[x] > 0, total_off_counts[x]), reverse=True)
                     
                     # 分派 N -> E -> D
