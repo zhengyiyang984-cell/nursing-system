@@ -79,7 +79,8 @@ if file_a and file_b:
         xl = pd.ExcelFile(file_b)
         active_sheet_name = "未指定分頁" 
         found_sheet = False
-        
+        except Exception as e:
+        st.error(f"系統運行錯誤: {e}")
         for sheet_name in xl.sheet_names:
             if any(k in sheet_name for k in ["規範", "說明", "填寫", "使用", "欄位"]):
                 continue
