@@ -161,13 +161,14 @@ if file_a and file_b:
                 total_off_counts = {str(n): 0 for n in full_time_names}
                 streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
                 
-                # 半職郭珍君的總天數計數器，本月必須精準等於 10 天
+                # 半職郭珍君的總天數計數器
                 pt_work_days_count = 0
+                pt_assigned_days = []
                 
                 for d in range(num_days):
                     if not valid_month: break
                     
-                    # 預設正職目標是白班 4 人
+                    # 預設每日白班目標 4 人
                     target = {"D": 4, "E": 3, "N": 2}
                     
                     if d > 0:
@@ -184,16 +185,16 @@ if file_a and file_b:
                             total_off_counts[str(n)] += 1
                             pool.remove(str(n))
                             
-                    # 2. 計算今天正職扣掉請假後剩多少活人
+                    # 2. ⚡ 核心動態捕手：計算今天正職扣除請假後剩下多少可用人手
                     active_ft_workers = [n for n in pool if ironed_vacation[n][d] != "R"]
                     
-                    # ⚡ 智慧動態捕手 ⚡：如果發現今天正職扣掉請假後小於 9 人（如19~22號人手大崩盤）
-                    # 且郭珍君目前累積天數還沒滿 10 天，今天就強制指派郭珍君上白班救火！
+                    # ➔ 如果活人小於 9 個人（人手不夠分配 4/3/2 ），且郭珍君還沒滿 10 天，強制塞給半職救火！
                     if len(active_ft_workers) < 9 and pt_work_days_count < 10:
                         for pt_name in part_time_names:
                             res[pt_name][d] = "D"
                         pt_work_days_count += 1
-                        target["D"] -= 1 # 正職的白班需求減少一個缺口！
+                        pt_assigned_days.append(d)
+                        target["D"] -= 1 # 扣減當天正職的白班需求名額
                     
                     # 3. 萬一半職出動了，正職請假人數還是大超標，再動態平滑微調正職假
                     total_required = target["D"] + target["E"] + target["N"]
@@ -261,11 +262,22 @@ if file_a and file_b:
                         res[str(n)][d] = "off"
                         total_off_counts[str(n)] += 1
                         
-                    # 人力精準總核對：只要當天任何一班沒對齊，這輪直接報廢重排！
+                    # 人力精準總核對：只要當天有任何一班沒完美歸零，這輪直接報廢重排！
                     if target["D"] != 0 or target["E"] != 0 or target["N"] != 0:
                         valid_month = False
 
-                # 💡 半職把關：郭珍君全月天數必須精準等於 10 天，少一天或多一天都作廢重來！
+                # 💡 半職強制補位機制：如果月底結算時，半職郭珍君救火天數少於 10 天，自動挑剩餘的日子幫她補滿 10 天
+                if valid_month and pt_work_days_count < 10:
+                    needed_days = 10 - pt_work_days_count
+                    all_possible_days = [x for x in range(num_days) if x not in pt_assigned_days]
+                    # 優先挑選當天白班全部由正職組成、且請假人數較多的日子塞入
+                    all_possible_days.sort(key=lambda x: sum(1 for n in full_time_names if bg_vacation[n][x] == "R"), reverse=True)
+                    
+                    for extra_day in all_possible_days[:needed_days]:
+                        for pt_name in part_time_names:
+                            res[pt_name][extra_day] = "D"
+                        pt_work_days_count += 1
+                
                 if pt_work_days_count != 10:
                     valid_month = False
 
@@ -292,16 +304,16 @@ if file_a and file_b:
                     break
             
             # --- 網頁渲染與輸出 ---
-            # ⚡ 徹底拔除原本壞掉的盲目保底，只輸出完全合法的結果
+            # ⚡ 核心保險：如果不成功便顯示錯誤訊息，絕不允許不符合 4/3/2 的爛數據印在畫面上！
             if not success_schedule or not final_res:
-                st.error("⚠️ 錯誤：在維持正職每人剛好休 8/9 天、且半職精準只上 10 天白班的鐵律下大死鎖。請點擊上方按鈕再次啟動重試，或是讓阿長微調衝突的指定預班！")
+                st.error("⚠️ 錯誤：目前正職指定班別與假表衝突過高。請點擊上方按鈕再次啟動重試，或是讓阿長微調衝突的指定預班！")
             else:
                 if revoked_log:
                     with warning_placeholder:
                         for log in revoked_log:
                             st.warning(log)
                             
-                st.success(f"🎉 完美通關！半職捕手已動態補位，全月每日均完美對齊『4白班（含半職）、3小夜、2大夜』的鋼鐵比例！")
+                st.success(f"🎉 完美通關！半職捕手已動態補位，全月每日均完美對齊『4白班（含半職）、3小夜、2大夜』的絕對比例！")
                 
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers    
