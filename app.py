@@ -101,7 +101,7 @@ def get_staff_configs(file):
 
 # 半職人員：固定上10天，2-3天連續班
 def schedule_part_time(num_days):
-    for _ in range(100):
+    for _ in range(50):
         days = ["off"] * num_days
         available_patterns = [[2, 2, 2, 2, 2], [3, 3, 2, 2], [3, 2, 3, 2], [2, 3, 2, 3], [2, 2, 3, 3]]
         work_blocks = random.choice(available_patterns)
@@ -196,78 +196,78 @@ if file_a and file_b and num_days > 0:
             final_res = {}
             next_month_history_row = {}
             next_month_streak_row = {}
+            is_fallback_used = False
             
             ft_off_target = 9 if num_days >= 31 else 8
             
-            for attempt in range(1500):
+            # 提高最大重試次數到 3000 次
+            for attempt in range(3000):
                 valid_month = True
                 res = {str(n): [""] * num_days for n in display_names}
                 
-                # 1. 半職先走區塊
+                # 半職優先使用區塊
                 for pt_name in part_time_names:
                     res[pt_name] = schedule_part_time(num_days)
 
                 total_off_counts = {str(n): 0 for n in full_time_names}
                 streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
-                off_streak_tracker = {str(n): 0 for n in full_time_names} # 追蹤正職連續休假
                 
-                # 2. 逐日滾動（動態落實 2-5天連班 與 禁碎班防線）
+                # --- 🔑 智慧解鎖機制：當嘗試超過 1000 次依然失敗時，自動動態放寬部分卡死限制 ---
+                allow_single_day_fallback = (attempt > 1000) 
+                allow_understaffed_fallback = (attempt > 2000)
+                
+                if allow_single_day_fallback and not is_fallback_used:
+                    is_fallback_used = True
+
                 for d in range(num_days):
                     if not valid_month: break
                     
+                    # 預設目標：白4、夜3、大夜2
                     target = {"D": 4, "E": 3, "N": 2}
+                    
+                    # 扣除半職已佔用的白班
                     for pt_name in part_time_names:
                         if res[pt_name][d] == "D": target["D"] -= 1
                     
-                    # 昨天的斷班狀況重置
                     if d > 0:
                         for n in full_time_names:
                             if res[n][d-1] in ["off", "v", "R"]:
                                 streak_tracker[n] = 0
-                            else:
-                                off_streak_tracker[n] = 0
 
                     pool = [str(n) for n in full_time_names]
                     
-                    # 【強制熔斷 1】：滿 5 連班者今天必須休假
+                    # 1. 滿 5 連班強制斷班
                     for n in pool.copy():
                         if streak_tracker[n] >= 5:
                             res[n][d] = "off"
                             total_off_counts[n] += 1
-                            off_streak_tracker[n] += 1
                             pool.remove(n)
 
-                    # 【強制熔斷 2】：個人指定預假 (R 班強制轉 off)
+                    # 2. 處理 R 班預約假
                     for n in pool.copy():
                         if bg_vacation[n][d] == "R":
                             res[n][d] = "off"
                             total_off_counts[n] += 1
-                            off_streak_tracker[n] += 1
                             pool.remove(n)
 
-                    # 【強制熔斷 3】：為了防止正職上「單天碎班」(010)，如果昨天休假，今天上了一天，明天又遇到指定預假R，今天就必須直接一起休！
-                    for n in pool.copy():
-                        prev_is_off = (res[n][d-1] in ["off", "v", "R"]) if d > 0 else (history_final[n] in ["off", "v", "R"])
-                        next_must_off = (bg_vacation[n][d+1] == "R") if d < (num_days - 1) else False
-                        if prev_is_off and next_must_off:
-                            res[n][d] = "off"
-                            total_off_counts[n] += 1
-                            off_streak_tracker[n] += 1
-                            pool.remove(n)
+                    # 3. 碎班防禦（若未觸發 fallback 寬限，嚴格執行）
+                    if not allow_single_day_fallback:
+                        for n in pool.copy():
+                            prev_is_off = (res[n][d-1] in ["off", "v", "R"]) if d > 0 else (history_final[n] in ["off", "v", "R"])
+                            next_must_off = (bg_vacation[n][d+1] == "R") if d < (num_days - 1) else False
+                            if prev_is_off and next_must_off:
+                                res[n][d] = "off"
+                                total_off_counts[n] += 1
+                                pool.remove(n)
 
-                    # 【強制熔斷 4】：為了確保連班至少 2 天，如果「昨天休假」且「今天被強迫推入 pool 要上班」，除非他明天也能上班，否則不准上單天班
-                    # 我們這裡透過後面的分派與排序來優先滿足
-
-                    # 填入特定指定預班 (D/E/N)
+                    # 4. 指定預班投放
                     for n in pool.copy():
                         v = bg_vacation[n][d]
                         if v in ["D", "E", "N"]:
                             if target[v] > 0 and v in perm_final[n]:
-                                # 檢查花班
                                 prev_1 = res[n][d-1] if d > 0 else history_final[n]
                                 if v == "D" and prev_1 in ["N", "E"]: 
                                     valid_month = False; break
-                                
                                 res[n][d] = v
                                 target[v] -= 1
                                 streak_tracker[n] += 1
@@ -277,15 +277,11 @@ if file_a and file_b and num_days > 0:
                     
                     if not valid_month: break
 
-                    # 排序池子：
-                    # 1. 昨天已經在上連班的人優先繼續上（滿足2-5天連班）
-                    # 2. 目前總休假落後（假拿太少）的人，今天優先給予 off 
+                    # 排序：優先讓已經連班中的人繼續上
                     random.shuffle(pool)
                     pool.sort(key=lambda x: (streak_tracker[x] > 0, total_off_counts[x]), reverse=True)
 
-                    needed_slots = sum(max(0, target[s]) for s in ["N", "E", "D"])
-                    
-                    # 開始分派
+                    # 分派班別
                     for shift in ["N", "E", "D"]:
                         qualified = []
                         for n in pool:
@@ -303,25 +299,29 @@ if file_a and file_b and num_days > 0:
                                 streak_tracker[chosen] += 1
                                 pool.remove(chosen)
                             else:
-                                valid_month = False
-                                break
+                                # 超過 2000 次重試仍失敗，允許在該衝突天白班或夜班減少 1 個名額，避免死鎖
+                                if allow_understaffed_fallback:
+                                    break 
+                                else:
+                                    valid_month = False
+                                    break
+                        if not valid_month: break
                                 
-                    # 剩下沒分到班的人，今天全部轉 off
+                    # 剩餘人員轉 off
                     for n in pool:
                         res[n][d] = "off"
                         total_off_counts[n] += 1
-                        off_streak_tracker[n] += 1
 
-                # 3. 最終大檢驗：正職總休假天數達標、且「絕對不上單天班 (010)」
+                # 5. 總休假與碎班最終檢驗
                 if valid_month:
                     for n in full_time_names:
                         if total_off_counts[n] != ft_off_target:
                             valid_month = False; break
                         
-                        # 轉成 01 字串做嚴格碎班與超長連班檢查
-                        days_str = "".join(["0" if res[n][x] in ["off", "v", "R"] else "1" for x in range(num_days)])
-                        if "010" in days_str or "111111" in days_str or days_str.startswith("10") or days_str.endswith("01"):
-                            valid_month = False; break
+                        if not allow_single_day_fallback:
+                            days_str = "".join(["0" if res[n][x] in ["off", "v", "R"] else "1" for x in range(num_days)])
+                            if "010" in days_str or "111111" in days_str or days_str.startswith("10") or days_str.endswith("01"):
+                                valid_month = False; break
 
                 if valid_month:
                     final_res = {str(k): v for k, v in res.items()}
@@ -336,9 +336,11 @@ if file_a and file_b and num_days > 0:
                     break
             
             if not success_schedule or not final_res:
-                st.error("⚠️ 當前各人員的預約假過於密集。在死鎖每日人力與『正職不上單天班』的限制下本輪未能配出。請再次點擊按鈕重試，或稍微微調預班表再試一次！")
+                st.error("⚠️ 警告：當前預約假衝突極度嚴重（某幾天可上班人數少於最低門檻）。請至 GitHub 專案微調您的預班表，將極端集中的假期錯開後再重試！")
             else:
-                st.success("🎉 全新滾動塊狀演算法排班成功！已為你完美排定正職 2-5 天連班，且絕無單天碎班！")
+                if is_fallback_used:
+                    st.warning("⚠️ 提示：由於預約假過於密集，系統已自動為您啟動「動態寬限機制」，允許在特定假期衝突天出現少量單天班或微調當日人力，以確保班表順利生成。")
+                st.success("🎉 班表成功產出！")
                 
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers    
