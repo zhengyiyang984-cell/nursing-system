@@ -88,7 +88,7 @@ def get_staff_configs(file):
 
 
 
-st.title("🏥 護理排班系統 (精準正職 4/3/2 核心完全版)")
+st.title("🏥 護理排班系統")
 
 
 
@@ -234,7 +234,7 @@ if file_a and file_b:
 
         
 
-        if st.button("🚀 啟動精準 4/3/2 排班", type="primary", use_container_width=True):
+        if st.button("🚀 啟動排班", type="primary", use_container_width=True):
 
             success_schedule = False
 
@@ -256,7 +256,7 @@ if file_a and file_b:
 
             
 
-            for attempt in range(5000):
+            for attempt in range(20000):
 
                 valid_month = True
 
