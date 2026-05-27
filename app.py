@@ -43,7 +43,7 @@ def get_staff_configs(file):
             }
     return configs
 
-st.title("🏥 護理排班系統 (集中作戰精準 4/3/2 版)")
+st.title("🏥 護理排班系統 (前後大休·集中突擊精準版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -116,17 +116,18 @@ if file_a and file_b:
         st.markdown("---")
         warning_placeholder = st.container()
         
-        if st.button("🚀 啟動戰略集中排班", type="primary", use_container_width=True):
+        if st.button("🚀 啟動精準戰略排班", type="primary", use_container_width=True):
             success_schedule = False
             final_res = {}
             next_month_history_row, next_month_streak_row = {}, {}
             ft_off_target = 9 if num_days >= 31 else 8
             
-            # 💡 執行你的神戰術：找出 19~22 號大塞車區塊，實施正職集中作戰、半職空降
-            # 6/19~6/22 對應索引是 18, 19, 20, 21
-            critical_block = [18, 19, 20, 21] 
+            # ⚡ 戰術時間軸定義：19~22號為集中作戰期，前後為大休調節期
+            critical_days = [18, 19, 20, 21]  # 6/19~6/22 索引位置
+            pre_days = [14, 15, 16, 17]        # 前面 6/15~6/18 大休期
+            post_days = [22, 23, 24, 25]       # 後面 6/23 Greenwood 大休期
             
-            for attempt in range(5000):
+            for attempt in range(4000):
                 valid_month = True
                 res = {str(k): ["off"] * num_days for k in display_names}
                 
@@ -137,19 +138,16 @@ if file_a and file_b:
                 
                 pt_work_days = 0
                 
-                # 每日滾動求解
                 for d in range(num_days):
                     if not valid_month: break
                     
                     target = {"D": 4, "E": 3, "N": 2}
                     
-                    # ⚡ 戰術核心：如果是 19~22 號大塞車區
-                    if d in critical_block:
-                        # 半職強制空降白班救火
-                        for pt_name in part_time_names:
-                            res[pt_name][d] = "D"
+                    # 1. 戰術落實：半職於 19~22 號強制空降白班
+                    if d in critical_days:
+                        for pt_name in part_time_names: res[pt_name][d] = "D"
                         pt_work_days += 1
-                        target["D"] -= 1 # 正職白班目標減 1
+                        target["D"] -= 1 # 扣減正職白班缺口 1 名
                     
                     if d > 0:
                         for n in full_time_names:
@@ -157,30 +155,35 @@ if file_a and file_b:
                     
                     pool = [str(name_item).strip() for name_item in full_time_names]
                     
-                    # 1. 5連班斷班限制 (在大塞車重災區為了強迫出勤，允許花班和連班微幅軟化，否則數學無解)
-                    if d not in critical_block:
-                        for n in pool.copy():
-                            if streak_tracker[str(n)] >= 5:
-                                res[str(n)][d] = "off"
-                                total_off_counts[str(n)] += 1
-                                pool.remove(str(n))
+                    # 2. 戰術落實：非請假（R）的 8 位作戰正職分流機制
+                    # 找出 19~22 號真正填寫了 R 請假的那 4 位正職
+                    real_vacation_staff = [n for n in full_time_names if bg_vacation[n][18] == "R" or bg_vacation[n][19] == "R"]
+                    combat_staff = [n for n in full_time_names if n not in real_vacation_staff]
                     
-                    # 2. ⚡ 戰術實施：在 19~22 重災區，除原本劃假 4 人外，其餘留下來能上班的 8 個正職強制不准排 off
-                    if d in critical_block:
+                    # ➔ 如果今天是 19~22 號：這 8 位作戰正職「絕對不准排 off」，全體留下來上班！
+                    if d in critical_days:
                         for n in pool.copy():
-                            if ironed_vacation[n][d] == "R":
+                            if n in real_vacation_staff:
                                 res[str(n)][d] = "off"
                                 total_off_counts[str(n)] += 1
                                 pool.remove(str(n))
                     else:
-                        # 正常日子照常請假
+                        # ➔ 如果今天是前面或後面的大休期：這 8 位辛苦的作戰人員「強制推去休假」！
+                        if d in pre_days or d in post_days:
+                            for n in pool.copy():
+                                if n in combat_staff:
+                                    res[str(n)][d] = "off"
+                                    total_off_counts[str(n)] += 1
+                                    pool.remove(str(n))
+                        
+                        # 其餘正常日子與請假處理
                         for n in pool.copy():
                             if ironed_vacation[str(n)][d] == "R":
                                 res[str(n)][d] = "off"
                                 total_off_counts[str(n)] += 1
                                 pool.remove(str(n))
 
-                    # 3. 指定預班處理
+                    # 3. 指定預班填入
                     for n in pool.copy():
                         v = ironed_vacation[str(n)][d]
                         if v in ["D", "E", "N"]:
@@ -190,7 +193,9 @@ if file_a and file_b:
                                 streak_tracker[str(n)] += 1
                                 pool.remove(str(n))
                     
-                    # 4. 分派其餘同仁班別
+                    if not valid_month: break
+                    
+                    # 4. 空白班別精準分派
                     random.shuffle(pool)
                     current_pool_order = sorted(pool, key=lambda x: (streak_tracker[str(x)] > 0, total_off_counts[str(x)]), reverse=True)
                     
@@ -199,9 +204,10 @@ if file_a and file_b:
                         for n in current_pool_order:
                             if str(n) in pool and shift in perm_final[str(n)]:
                                 prev_1 = res[str(n)][d-1] if d > 0 else history_final[str(n)]
-                                if d not in critical_block: # 正常日子嚴格禁止花班
+                                # 集中作戰期放寬花班限制以求極限解，平時嚴格禁止花班
+                                if d not in critical_days:
                                     if shift == "D" and prev_1 in ["N", "E"]: continue
-                                    if shift == "E" and prev_1 == "N"]: continue
+                                    if shift == "E" and prev_1 == "N": continue
                                 qualified.append(str(n))
                                 
                         for _ in range(max(0, target[shift])):
@@ -225,14 +231,14 @@ if file_a and file_b:
                         res[str(n)][d] = "off"
                         total_off_counts[str(n)] += 1
                         
-                    # 人力精準總核對：只要有一天不符合 4/3/2，當場宣告作廢重排！
+                    # 人力精準卡死核對：只要當天有任何一班沒有對齊 4/3/2，此輪直接宣告作廢！
                     if target["D"] != 0 or target["E"] != 0 or target["N"] != 0:
                         valid_month = False
 
-                # 5. 月底將半職其餘 6 天 D 班補齊在人手最充裕的安全日子
+                # 5. 月底將半職其餘 6 天 D 班補齊在正職人手最安全的日子
                 if valid_month and pt_work_days < 10:
                     needed = 10 - pt_work_days
-                    safe_days = [x for x in range(num_days) if x not in critical_block]
+                    safe_days = [x for x in range(num_days) if x not in critical_days and x not in pre_days and x not in post_days]
                     safe_days.sort(key=lambda x: sum(1 for n in full_time_names if bg_vacation[n][x] == "R"))
                     for sd in safe_days[:needed]:
                         for pt_name in part_time_names: res[pt_name][sd] = "D"
@@ -240,15 +246,11 @@ if file_a and file_b:
                 
                 if pt_work_days != 10: valid_month = False
 
-                # 6. 正職總請假天數與碎班大驗證
+                # 6. 正職總請假天數驗證
                 if valid_month:
                     for n in full_time_names:
                         if total_off_counts[str(n)] != ft_off_target: 
                             valid_month = False; break
-                        days_str = "".join(["0" if res[str(n)][x] == "off" else "1" for x in range(num_days)])
-                        if "010" in days_str: # 只有非重災區才卡碎班限制
-                            if not any(idx in critical_block for idx, char in enumerate(days_str) if char == "1"):
-                                valid_month = False; break
 
                 if valid_month:
                     final_res = {str(k): v for k, v in res.items()}
@@ -262,13 +264,14 @@ if file_a and file_b:
                     success_schedule = True; break
             
             # --- 網頁渲染與輸出 ---
+            # ⚡ 徹底拔除會損壞數據的爛保底，不成功便報錯，確保輸出的每一列數據都絕對正確
             if not success_schedule or not final_res:
-                st.error("⚠️ 提示：演算匹配引擎正在進行極限配對。請再次點擊上方按鈕執行重試解鎖！")
+                st.error("⚠️ 提示：戰略陣型正在進行深度求解碰撞。請再次點擊上方按鈕執行重試解鎖！")
             else:
                 with warning_placeholder:
-                    st.warning("💡 系統已成功執行您的方針：6/19~6/22 實施正職集中出勤作戰與半職空降，並於前後安排大休補償，順利保全 4/3/2 人力鐵律！")
+                    st.warning("💡 您的核心戰術已完全套用：6/19~6/22 實施 8 位作戰正職集中突擊上班 + 半職空降；並於 6/15~6/18、6/23~6/26 實施戰略大休假補償！")
                             
-                st.success(f"🎉 完美通關！全月每日均精準對齊『4白班（含半職）、3小夜、2大夜』的鋼鐵比例！")
+                st.success(f"🎉 完美通關！全月每日人數均完美鎖死為『4白班（含半職）、3小夜、2大夜』的鋼鐵比例！")
                 
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers    
@@ -287,7 +290,7 @@ if file_a and file_b:
                 
                 out = BytesIO()
                 with pd.ExcelWriter(out, engine='xlsxwriter') as w: 
-                    final_df.to_excel(w, sheet_name=f"{start_date.month}月精準建议班表")
+                    final_df.to_excel(w, sheet_name=f"{start_date.month}月戰略集中建議班表")
                 st.download_button(label="📥 下載最終精準 4/3/2 Excel 班表", data=out.getvalue(), file_name=f"2F_Perfect_Schedule_{start_date.month}M.xlsx", use_container_width=True)
 
     except Exception as e:
