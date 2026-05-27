@@ -116,7 +116,7 @@ if file_a and file_b:
         st.markdown("---")
         warning_placeholder = st.container()
         
-      for d in range(num_days):
+          for d in range(num_days):
                     if not valid_month: break
                     
                     target = {"D": 4, "E": 3, "N": 2}
