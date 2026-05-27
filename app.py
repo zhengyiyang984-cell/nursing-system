@@ -1,76 +1,38 @@
 import streamlit as st
 import pandas as pd
-import random
+import numpy as np
 
-# 設定網頁佈局
-st.set_page_config(page_title="2F 智慧排班系統", layout="wide")
+st.set_page_config(page_title="2F 智慧排班測試系統", layout="wide")
 
-# --- 1. 核心自動排班引擎 ---
-def auto_fill_missing_shifts(df, staff_perm):
-    # 定義目標人數
-    TARGET = {'D': 4, 'E': 3, 'N': 2}
+# --- 1. 定義人員與預設 ---
+STAFF_LIST = ["郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", "汪家容", "林欣儀", "林怡薇"]
+
+# --- 2. 介面 ---
+st.title("🏥 2F 智慧排班系統 (測試版)")
+st.info("您目前尚未上傳檔案，系統將為您產生一張 30 天的空白班表供測試。")
+
+# --- 3. 自動產生空白班表 ---
+if 'schedule_df' not in st.session_state:
+    # 產生 30 天的列，人員為行
+    days = [f"{i+1}日" for i in range(30)]
+    st.session_state.schedule_df = pd.DataFrame("", index=STAFF_LIST, columns=days)
+
+st.subheader("📝 本月排班編輯")
+edited_df = st.data_editor(st.session_state.schedule_df, use_container_width=True)
+
+# --- 4. 自動補班邏輯 ---
+if st.button("🚀 執行智慧自動排班"):
+    # 簡單自動補位邏輯：如果該格是空的，暫時隨機補入 D/E/N (僅供測試)
+    filled_df = edited_df.copy()
+    for col in filled_df.columns:
+        for row in filled_df.index:
+            if filled_df.loc[row, col] == "":
+                # 這裡會是您的智慧權重引擎
+                filled_df.loc[row, col] = np.random.choice(['D', 'E', 'N', 'off'])
     
-    # 針對每一天進行填補
-    for day in df.columns:
-        # 統計當天目前人數
-        current_counts = df[day].value_counts()
-        
-        for shift in ['N', 'E', 'D']: # 先補夜班最難補的
-            while current_counts.get(shift, 0) < TARGET.get(shift, 0):
-                # 找出符合該班別權限，且當天還沒排班的人
-                candidates = [
-                    name for name in df.index 
-                    if df.loc[name, day] not in ['D', 'E', 'N', 'R', 'V'] 
-                    and shift in staff_perm.get(name, "DEN")
-                ]
-                
-                if not candidates:
-                    break # 真的補不到了
-                
-                # 權重補位：找目前總排班數最少的人優先
-                best_candidate = min(candidates, key=lambda n: df.loc[n].isin(['D', 'E', 'N']).sum())
-                df.loc[best_candidate, day] = shift
-                current_counts = df[day].value_counts()
-    return df
-
-# --- 2. 界面邏輯 ---
-st.title("🏥 2F 智慧排班管理系統")
-
-# 設定人員權限 (可擴充為動態讀取)
-if 'staff_perm' not in st.session_state:
-    st.session_state.staff_perm = {name: "DEN" for name in ["郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", "汪家容", "林欣儀", "林怡薇"]}
-
-with st.sidebar:
-    st.subheader("⚙️ 人員權限與工時")
-    st.session_state.staff_perm = st.data_editor(pd.DataFrame.from_dict(st.session_state.staff_perm, orient='index', columns=['權限']))
-
-# 上傳預排表
-uploaded_file = st.file_uploader("📂 上傳【預排休班表】", type=["xlsx"])
-
-if uploaded_file:
-    df = pd.read_excel(uploaded_file, index_col=0)
+    st.success("✅ 測試版自動排班完成！")
+    st.dataframe(filled_df, use_container_width=True)
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("手動預排編輯")
-        edited_df = st.data_editor(df, use_container_width=True)
-    
-    with col2:
-        st.subheader("自動化補位")
-        if st.button("🚀 執行智慧自動排班"):
-            # 複製預排表進行自動化
-            filled_df = auto_fill_missing_shifts(edited_df.copy(), st.session_state.staff_perm['權限'].to_dict())
-            st.success("✅ 自動補位完成！")
-            st.dataframe(filled_df, use_container_width=True)
-            
-            # 檢查規則
-            violations = []
-            if "郭珍君" in filled_df.index:
-                pt_days = filled_df.loc["郭珍君"].isin(['D', 'E', 'N']).sum()
-                if pt_days > 10: violations.append(f"❌ 郭珍君工時已達 {pt_days} 天，超過 10 天上限！")
-            
-            for v in violations: st.error(v)
-            
-            # 輸出檔案
-            csv = filled_df.to_csv().encode('utf-8')
-            st.download_button("📥 下載完成班表", csv, "Final_Schedule.csv")
+    # 下載功能
+    csv = filled_df.to_csv().encode('utf-8')
+    st.download_button("📥 下載測試班表", csv, "Test_Schedule.csv")
