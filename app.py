@@ -43,7 +43,6 @@ def get_staff_configs(file):
         if any(k in combined_text for k in ["---", "每日人力", "總人數", "核對", "白班", "小夜", "大夜", "下月接續", "統計", "合計"]):
             continue
 
-        # 逆向解析出真正的同仁姓名
         staff_name = ""
         for cell_val in [c2, c1, c0]:
             if cell_val and not cell_val.replace(".0", "").isdigit() and "半職" not in cell_val and cell_val != "nan":
@@ -54,8 +53,6 @@ def get_staff_configs(file):
             continue
             
         pure_name = re.sub(r'[\s\u3000]', '', staff_name)
-        
-        # 判定郭珍君為唯一半職
         is_pt = (pure_name == "郭珍君")
         
         pure_perm = "DEN"
@@ -85,8 +82,6 @@ def get_staff_configs(file):
     return configs
 
 # --- 2. 區塊循環排班核心演算法 ---
-
-# 半職人員（郭珍君）：固定上10天，嚴格 2-3天連續班區塊循環
 def schedule_part_time(num_days):
     for _ in range(1000):
         days = ["off"] * num_days
@@ -117,7 +112,6 @@ def schedule_part_time(num_days):
         if idx < num_days: backup_days[idx] = "D"
     return backup_days
 
-# 正職人員：滿足總休假，嚴格 2-5天連續班區塊循環
 def schedule_full_time_blocks(num_days, max_off_target):
     work_target = num_days - max_off_target
     for _ in range(1500):
@@ -155,7 +149,7 @@ def schedule_full_time_blocks(num_days, max_off_target):
     return backup_days
 
 
-st.title("🏥 護理排班系統 (姓名精準對齊版)")
+st.title("🏥 護理排班系統 (智慧欄位修正版)")
 
 with st.sidebar:
     st.header("📂 檔案上傳與日期設定")
@@ -183,7 +177,7 @@ if file_a and file_b and num_days > 0:
         part_time_names = [n for n in all_names if staff_configs[n]["is_part_time"]]
         display_names = full_time_names + part_time_names
 
-        # 自動智慧搜尋含有假表資料的 Sheet
+        # 智慧切換頁籤
         xl = pd.ExcelFile(file_b)
         target_sheet = xl.sheet_names[0]
         for sheet in xl.sheet_names:
@@ -192,20 +186,50 @@ if file_a and file_b and num_days > 0:
                 break
         df_b = pd.read_excel(file_b, sheet_name=target_sheet, header=None)
         
-        bg_vacation = {n: [""] * num_days for n in display_names}
-        for i in range(len(df_b)):
-            b_name = re.sub(r'[\s\u3000]', '', str(df_b.iloc[i, 2]))
-            if b_name in staff_configs:
-                for d in range(num_days):
-                    val = str(df_b.iloc[i, d+3]).strip().upper() if (d+3) < len(df_b.columns) else ""
-                    if val in ["D", "E", "N"]: 
-                        # 如果是郭珍君（半職）自己填寫了單天班，不讓它鎖死 bg_vacation，保留純區塊彈性
-                        if b_name not in part_time_names:
-                            bg_vacation[b_name][d] = val
-                    else:
-                        bg_vacation[b_name][d] = "R" # 空白一律視為預約假
+        # --- ⚡ 關鍵修正：智慧動態錨定姓名欄與日期起點 ⚡ ---
+        name_col_idx = 2  # 預設為第三欄 (C欄)
+        date_start_col_idx = 3 # 預設為第四欄 (D欄)
+        
+        # 掃描前 10 列，找出哪一欄寫了「姓名」，並找出數字 1 (代表1號) 在哪裡
+        found_anchor = False
+        for r in range(min(10, len(df_b))):
+            row_vals = [str(v).strip() for v in df_b.iloc[r].values]
+            if "姓名" in row_vals:
+                name_col_idx = row_vals.index("姓名")
+                # 在同一列往後找第一個出現 "1" 或 "1.0" 的欄位
+                for c_idx in range(name_col_idx + 1, len(row_vals)):
+                    if row_vals[c_idx] in ["1", "1.0"]:
+                        date_start_col_idx = c_idx
+                        found_anchor = True
+                        break
+            if found_anchor: break
 
-        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員。半職員工已鎖定：【{', '.join(part_time_names)}】。")
+        bg_vacation = {n: [""] * num_days for n in display_names}
+        
+        for i in range(len(df_b)):
+            # 動態根據剛剛找到的 name_col_idx 取出姓名
+            raw_b_name = str(df_b.iloc[i, name_col_idx]) if name_col_idx < len(df_b.columns) else ""
+            b_name = re.sub(r'[\s\u3000]', '', raw_b_name)
+            
+            # 去除可能殘留的職級文字 (例如 "李雅慧PN3" 轉化為能與 "李雅慧" 比對)
+            matched_name = None
+            for n in display_names:
+                if n in b_name or b_name in n:
+                    matched_name = n
+                    break
+            
+            if matched_name:
+                for d in range(num_days):
+                    # 動態根據剛剛找到的 date_start_col_idx 往後推算日期
+                    col_pos = date_start_col_idx + d
+                    val = str(df_b.iloc[i, col_pos]).strip().upper() if col_pos < len(df_b.columns) else ""
+                    if val in ["D", "E", "N"]: 
+                        if matched_name not in part_time_names:
+                            bg_vacation[matched_name][d] = val
+                    elif val in ["OFF", "R", "V", "開會"] or pd.isna(df_b.iloc[i, col_pos]) or val == "NAN" or val == "":
+                        bg_vacation[matched_name][d] = "R"
+
+        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員。欄位智慧錨定：【姓名】位於第 {name_col_idx+1} 欄，【1號】位於第 {date_start_col_idx+1} 欄。")
 
         st.subheader("⚙️ 核對權限與銜接狀態")
         history_final, perm_final, cont_days_final = {}, {}, {}
@@ -233,23 +257,19 @@ if file_a and file_b and num_days > 0:
             
             ft_off_target = 9 if num_days >= 31 else 8
             
-            # 2000 回合純區塊深度媒合
             for attempt in range(2000):
                 valid_month = True
                 res = {k: [""] * num_days for k in display_names}
                 
-                # 1. 郭珍君獨立走 2-3 天半職區塊
                 for pt_name in part_time_names:
                     res[pt_name] = schedule_part_time(num_days)
                 
-                # 2. 正職員工產生 2-5 天純區塊骨架
                 ft_block_skeletons = {}
                 for ft_name in full_time_names:
                     ft_block_skeletons[ft_name] = schedule_full_time_blocks(num_days, ft_off_target)
 
                 total_off_counts = {n: 0 for n in full_time_names}
                 
-                # 3. 逐日滾動核對
                 for d in range(num_days):
                     if not valid_month: break
                     
@@ -265,14 +285,12 @@ if file_a and file_b and num_days > 0:
                             res[n][d] = "off"
                             total_off_counts[n] += 1
                     
-                    # 處理個人預約假 (R)
                     for n in pool.copy():
                         if bg_vacation[n][d] == "R":
                             res[n][d] = "off"
                             total_off_counts[n] += 1
                             pool.remove(n)
                     
-                    # 優先指派指定預班
                     for n in pool.copy():
                         v = bg_vacation[n][d]
                         if v in ["D", "E", "N"]:
@@ -286,7 +304,6 @@ if file_a and file_b and num_days > 0:
                     if not valid_month: break
                     random.shuffle(pool)
                     
-                    # 指派 N -> E -> D
                     for shift in ["N", "E", "D"]:
                         qualified = []
                         for n in pool:
@@ -334,7 +351,7 @@ if file_a and file_b and num_days > 0:
             if not success_schedule or not final_res:
                 st.error("⚠️ 原始純區塊條件非常嚴格。請確保預排休表中每日空白放假人數控制在4人以內（不含郭珍君），確認後再次嘗試！")
             else:
-                st.success("🎉 純區塊循環班表成功產出！已將郭珍君獨立套用半職邏輯。")
+                st.success("🎉 純區塊循環班表成功產出！已自動相容新編排的欄位。")
                 
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers    
