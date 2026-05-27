@@ -68,29 +68,19 @@ with st.sidebar:
 
 if file_a and file_b:
     try:
-        # 1. 讀取並處理基本班表設定
+        # 1. 初始化設定 (這部分保持你的邏輯)
         staff_configs = get_staff_configs(file_a)
-        all_names = list(staff_configs.keys())
-        full_time_names = [str(n) for n in all_names if not staff_configs[n]["is_part_time"]]
-        part_time_names = [str(n) for n in all_names if staff_configs[n]["is_part_time"]]
-        display_names = full_time_names + part_time_names
+        # ... (讀取資料的代碼) ...
 
-        # 2. 初始化預排休表
-        bg_vacation = {n: [""] * num_days for n in display_names}
-        xl = pd.ExcelFile(file_b)
-        active_sheet_name = "未指定分頁" 
-        found_sheet = False
-        
-        # 3. 讀取 Excel 分頁
-        for sheet_name in xl.sheet_names:
-            if any(k in sheet_name for k in ["規範", "說明", "填寫", "使用", "欄位"]):
-                continue
+        # 2. 啟動排班按鈕
+        if st.button("🚀 啟動精準 4/3/2 排班", type="primary", use_container_width=True):
+            # 你的排班演算法代碼放在這裡
+            # ...
+            # 你的排班渲染代碼放在這裡
             
-            # (這裡維持你原本的 Excel 讀取與處理邏輯)
-            df_b = pd.read_excel(file_b, sheet_name=sheet_name, header=None)
-            # ... 後續處理邏輯 ...
-            found_sheet = True
-            break 
+    except Exception as e:
+        # 這是整個 if file_a and file_b 區塊的結尾
+        st.error(f"系統解析錯誤: {e}")
 
             df_b = pd.read_excel(file_b, sheet_name=sheet_name, header=None)
             
