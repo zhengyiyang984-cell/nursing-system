@@ -51,33 +51,8 @@ def get_staff_configs(file):
             }
     return configs
 
-# --- 2. 半職區塊循環產生器 ---
-def schedule_part_time(num_days):
-    for _ in range(1000):
-        days = ["off"] * num_days
-        available_patterns = [[2, 2, 2, 2, 2], [3, 3, 2, 2], [3, 2, 3, 2], [2, 3, 2, 3], [2, 2, 3, 3]]
-        work_blocks = random.choice(available_patterns)
-        random.shuffle(work_blocks) 
-        
-        current_idx = random.randint(0, 2)
-        success = True
-        for block in work_blocks:
-            if current_idx + block > num_days:
-                success = False; break
-            for _ in range(block):
-                if current_idx < num_days:
-                    days[current_idx] = "D"
-                    current_idx += 1
-            current_idx += random.randint(2, 4)
-            
-        if success and days.count("D") == 10:
-            days_str = "".join(["1" if d == "D" else "0" for d in days])
-            if "1111" not in days_str and "010" not in days_str and not days_str.startswith("10") and not days_str.endswith("01"):
-                return days
-    return ["off"] * num_days
 
-
-st.title("🏥 護理排班系統 (智慧清洗精準 4/3/2 版)")
+st.title("🏥 護理排班系統 (半職智慧空降精準 4/3/2 版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -141,16 +116,13 @@ if file_a and file_b:
                             col_pos = date_start_idx + d
                             if col_pos < len(df_b.columns):
                                 cell_val = str(df_b.iloc[i, col_pos]).strip().upper()
-                                
-                                # ⚡ 終極智慧清洗雷達：排除 D2、開會、多重字串的干擾
                                 if "D" in cell_val and "R" not in cell_val:
                                     bg_vacation[target_person][d] = "D"
                                 elif "E" in cell_val:
                                     bg_vacation[target_person][d] = "E"
                                 elif "N" in cell_val:
                                     bg_vacation[target_person][d] = "N"
-                                else:
-                                    # 包含開會、R、OFF、空白，通通一律自動洗成標準假別 R
+                                elif "R" in cell_val or "OFF" in cell_val or "V" in cell_val or "●" in cell_val or cell_val == "NAN" or cell_val == "":
                                     bg_vacation[target_person][d] = "R"
                 break
 
@@ -180,15 +152,51 @@ if file_a and file_b:
             next_month_history_row, next_month_streak_row = {}, {}
             ft_off_target = 9 if num_days >= 31 else 8
             
-            revoked_vacations_log = [] 
+            # ⚡ 核心演算法重構：【半職火力支援與假表前置熨平機制】 ⚡
+            # 1. 數出每天正職請假的人數
+            daily_off_counts = []
+            for d in range(num_days):
+                ft_off_today = sum(1 for n in full_time_names if bg_vacation[n][d] == "R")
+                daily_off_counts.append((d, ft_off_today))
             
-            for attempt in range(3000):
+            # 2. 智慧排序：找出整個月裡面，「正職請假人數最多、最缺人」的前 10 天！
+            # 按照請假人數由大到小排序
+            sorted_by_danger = sorted(daily_off_counts, key=lambda x: x[1], reverse=True)
+            top_10_dangerous_days = [item[0] for item in sorted_by_danger[:10]]
+            
+            # 3. 將半職（郭珍君）的 10 天 D 班，精準鎖定並填入這 10 個最危險的天數中
+            pt_schedule_dict = {}
+            for pt_name in part_time_names:
+                pt_schedule_dict[pt_name] = ["off"] * num_days
+                for danger_day in top_10_dangerous_days:
+                    pt_schedule_dict[pt_name][danger_day] = "D"
+            
+            # 4. 熨平系統：在半職空降後，如果正職請假人數依然讓剩餘人力小於 9 人，再動態釋放請假
+            ironed_vacation = {n: bg_vacation[n].copy() for n in display_names}
+            revoked_log = []
+            
+            for d in range(num_days):
+                ft_off_today_list = [n for n in full_time_names if ironed_vacation[n][d] == "R"]
+                # 扣掉半職能幫忙補的白班名額
+                pt_support = 1 if d in top_10_dangerous_days else 0
+                
+                # 正職剩餘可用人數 = 12 - 請假人數。
+                # 必須滿足：可用人數 >= 9 - 半職支援。
+                while (12 - len(ft_off_today_list)) < (9 - pt_support):
+                    fired_person = random.choice(ft_off_today_list)
+                    ironed_vacation[fired_person][d] = "" 
+                    ft_off_today_list.remove(fired_person)
+                    msg = f"⚠️ 偵測到 {d+1}日 請假人數大撞車（超過負荷），半職空降後依然不足，已徵調正職【{fired_person}】回單位支援以維持 4/3/2 人力標準。"
+                    if msg not in revoked_log: revoked_log.append(msg)
+
+            # 開始進入滑動視窗核心求解
+            for attempt in range(2500):
                 valid_month = True
                 res = {str(k): ["off"] * num_days for k in display_names}
-                local_vacation = {n: bg_vacation[n].copy() for n in display_names}
                 
-                for pt_name in part_time_names: 
-                    res[str(pt_name)] = schedule_part_time(num_days)
+                # 填入剛剛精準算好的半職空降班表
+                for pt_name in part_time_names:
+                    res[str(pt_name)] = pt_schedule_dict[pt_name].copy()
                     
                 total_off_counts = {str(n): 0 for n in full_time_names}
                 streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
@@ -196,10 +204,11 @@ if file_a and file_b:
                 for d in range(num_days):
                     if not valid_month: break
                     
+                    # 鎖定每日 4/3/2 目標
                     target = {"D": 4, "E": 3, "N": 2}
                     for pt_name in part_time_names:
                         if res[str(pt_name)][d] == "D": 
-                            target["D"] -= 1
+                            target["D"] -= 1 # 半職精準分擔白班名額
                     
                     if d > 0:
                         for n in full_time_names:
@@ -215,30 +224,16 @@ if file_a and file_b:
                             total_off_counts[str(n)] += 1
                             pool.remove(str(n))
                             
-                    # 2. 智慧軟化與動態假表調節：確保剩餘人力絕對能湊滿當天 4/3/2
-                    total_required = target["D"] + target["E"] + target["N"]
-                    available_workers = [n for n in pool if local_vacation[str(n)][d] != "R"]
-                    
-                    while len(available_workers) < total_required and len(pool) >= total_required:
-                        v_workers = [n for n in pool if local_vacation[str(n)][d] == "R"]
-                        if not v_workers: break
-                        v_workers.sort(key=lambda x: total_off_counts[str(x)], reverse=True)
-                        pulled_person = v_workers[0]
-                        local_vacation[pulled_person][d] = "" 
-                        available_workers.append(pulled_person)
-                        msg = f"⚠️ 偵測到 {d+1}號 劃假人數大撞車，系統已調度【{pulled_person}】支援出勤以精準維持 4/3/2 人力標準。"
-                        if msg not in revoked_vacations_log: revoked_vacations_log.append(msg)
-                    
-                    # 3. 處理放假的人
+                    # 2. 處理預約假
                     for n in pool.copy():
-                        if local_vacation[str(n)][d] == "R":
+                        if ironed_vacation[str(n)][d] == "R":
                             res[str(n)][d] = "off"
                             total_off_counts[str(n)] += 1
                             pool.remove(str(n))
 
-                    # 4. 指定預班處理
+                    # 3. 指定預班處理
                     for n in pool.copy():
-                        v = local_vacation[str(n)][d]
+                        v = ironed_vacation[str(n)][d]
                         if v in ["D", "E", "N"]:
                             if target[v] > 0 and v in perm_final[str(n)]:
                                 res[str(n)][d] = v
@@ -250,7 +245,7 @@ if file_a and file_b:
                     
                     if not valid_month: break
                     
-                    # 5. 剩餘空白正職分派
+                    # 4. 剩餘空白正職分配：依據連班狀態與休假天數進行平滑排序
                     random.shuffle(pool)
                     current_pool_order = sorted(pool, key=lambda x: (streak_tracker[str(x)] > 0, total_off_counts[str(x)]), reverse=True)
                     
@@ -284,7 +279,7 @@ if file_a and file_b:
                         res[str(n)][d] = "off"
                         total_off_counts[str(n)] += 1
                         
-                    # 人力精準卡死核對
+                    # 人力精準總核對
                     if target["D"] != 0 or target["E"] != 0 or target["N"] != 0:
                         valid_month = False
 
@@ -310,16 +305,16 @@ if file_a and file_b:
                     success_schedule = True
                     break
             
-            # --- 3. 渲染輸出 ---
+            # --- 5. 網頁渲染與輸出 ---
             if not success_schedule or not final_res:
-                st.error("⚠️ 無法配出完美對齊 4/3/2 的班表。請檢查是否有同仁在同一天指定了衝突的班別。")
+                st.error("⚠️ 無法配出完美對齊 4/3/2 的班表。請點擊按鈕再次啟動重試，或是調整同仁衝突的指定出勤！")
             else:
-                if revoked_vacations_log:
+                if revoked_log:
                     with warning_placeholder:
-                        for log in revoked_vacations_log[:4]:
+                        for log in revoked_log:
                             st.warning(log)
                             
-                st.success(f"🎉 成功！班表已完全符合每日白班4人（含半職）、小夜3人、大夜2人的絕對標準！")
+                st.success(f"🎉 成功！【半職智慧空降法】已將郭珍君精準填入最缺人的 10 天，班表已完全對齊每日 4/3/2 人力標準！")
                 
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers    
