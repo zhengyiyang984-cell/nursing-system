@@ -107,7 +107,7 @@ def schedule_full_time_blocks(num_days, max_off_target):
     return ["WORK"] * work_target + ["off"] * (num_days - work_target)
 
 
-st.title("🏥 護理排班系統 (終極模糊雷達版)")
+st.title("🏥 護理排班系統 (標準範例自動相容版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -129,55 +129,38 @@ if file_a and file_b:
         part_time_names = [n for n in all_names if staff_configs[n]["is_part_time"]]
         display_names = full_time_names + part_time_names
 
-        # 初始化假表
         bg_vacation = {n: ["R"] * num_days for n in display_names}
         
         xl = pd.ExcelFile(file_b)
         active_sheet_name = ""
         found_sheet = False
         
-        # 遍歷所有頁籤，自動過濾說明文
+        # 遍歷所有頁籤
         for sheet_name in xl.sheet_names:
+            # ⚡ 核心機制：只要頁籤名稱包含說明、規範、填寫，直接過濾不讀取！
             if any(k in sheet_name for k in ["規範", "說明", "填寫", "使用", "欄位"]):
                 continue
                 
             df_b = pd.read_excel(file_b, sheet_name=sheet_name, header=None)
             
-            # --- ⚡ 關鍵升級：全模糊動態座標雷達 ⚡ ---
-            name_col_idx = 1       # 預設 B 欄
-            date_start_idx = 2     # 預設 C 欄
-            header_row_idx = 0
+            # 完全對齊你的標準範例網格座標：B欄是姓名(1)，C欄是1號起點(2)
+            name_col_idx = 1       
+            date_start_idx = 2     
+            header_row_idx = 0     
             
-            # 掃描前 10 列所有的格子，用最寬鬆的條件定位「姓名」與「1號」
-            for r in range(min(10, len(df_b))):
-                row_vals_clean = [str(v).strip().replace(".0", "") for v in df_b.iloc[r].values]
-                
-                # 只要格子裡「包含」姓名兩個字，就咬定這一列是標頭列
-                for c_idx, val in enumerate(row_vals_clean):
-                    if "姓名" in val:
-                        name_col_idx = c_idx
-                        header_row_idx = r
-                        
-                        # 從姓名格往右找第一個出現「1」的地方作為日期起點
-                        for d_idx in range(name_col_idx + 1, len(row_vals_clean)):
-                            if row_vals_clean[d_idx] == "1":
-                                date_start_idx = d_idx
-                                found_sheet = True
-                                active_sheet_name = sheet_name
-                                break
-                    if found_sheet: break
-                if found_sheet: break
-                
-            # 如果真的因為字體奇特找不到，強制開啟大底層保險保證不當機
-            if not found_sheet:
-                name_col_idx = 1
-                date_start_idx = 2
-                header_row_idx = 0
-                found_sheet = True
-                active_sheet_name = sheet_name
-            
+            # 地毯式檢查這一頁是不是真正的假表
+            for r in range(min(5, len(df_b))):
+                vals = [str(v).strip() for v in df_b.iloc[r].values]
+                if "姓名" in vals:
+                    name_col_idx = vals.index("姓名")
+                    date_start_idx = name_col_idx + 1
+                    header_row_idx = r
+                    found_sheet = True
+                    active_sheet_name = sheet_name
+                    break
+                    
             if found_sheet:
-                # 開始依照網格絕對座標提取假表資料
+                # 精準座標提取資料
                 for i in range(header_row_idx + 1, len(df_b)):
                     raw_cell_name = str(df_b.iloc[i, name_col_idx]).strip() if name_col_idx < len(df_b.columns) else ""
                     if not raw_cell_name or raw_cell_name == "nan" or "序號" in raw_cell_name: continue
@@ -194,7 +177,6 @@ if file_a and file_b:
                             col_pos = date_start_idx + d
                             if col_pos < len(df_b.columns):
                                 cell_val = str(df_b.iloc[i, col_pos]).strip().upper()
-                                # 鎖定指定出勤 (D/E/N)
                                 if cell_val in ["D", "E", "N"]:
                                     if target_person not in part_time_names:
                                         bg_vacation[target_person][d] = cell_val
@@ -202,7 +184,10 @@ if file_a and file_b:
                                     bg_vacation[target_person][d] = "R"
                 break
 
-        st.success(f"🎉 模糊雷達校正成功！已綁定分頁：【{active_sheet_name}】。")
+        if found_sheet:
+            st.success(f"🎉 成功自動跳過規範說明頁！精準鎖定資料分頁：【{active_sheet_name}】。")
+        else:
+            st.error("❌ 錯誤：無法在 Excel 裡辨識出您的排修結構，請確認預排休表是否包含『姓名』欄位！")
 
         st.subheader("⚙️ 核對權限與銜接狀態")
         history_final, perm_final, cont_days_final = {}, {}, {}
