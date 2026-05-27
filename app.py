@@ -50,7 +50,7 @@ def get_staff_configs(file):
             }
     return configs
 
-# --- 2. 區塊循環排班演算法 ---
+# --- 2. 區塊循環排班演算法（半職保留，正職改為滑動視窗動態法） ---
 def schedule_part_time(num_days):
     for _ in range(1000):
         days = ["off"] * num_days
@@ -75,30 +75,8 @@ def schedule_part_time(num_days):
                 return days
     return ["off"] * num_days
 
-def schedule_full_time_blocks(num_days, max_off_target):
-    work_target = num_days - max_off_target
-    for _ in range(1500):
-        days = ["off"] * num_days
-        current_idx = random.randint(0, 1)
-        total_work_assigned = 0
-        
-        while total_work_assigned < work_target and current_idx < num_days:
-            rem = work_target - total_work_assigned
-            block = random.randint(2, min(5, rem)) if rem >= 2 else rem
-            if current_idx + block > num_days: break
-                
-            for i in range(block): days[current_idx + i] = "WORK"
-            total_work_assigned += block
-            current_idx += block + random.randint(1, 3)
-            
-        if days.count("WORK") == work_target:
-            days_str = "".join(["1" if d == "WORK" else "0" for d in days])
-            if "010" not in days_str and "111111" not in days_str and not days_str.startswith("10") and not days_str.endswith("01"):
-                return days
-    return ["WORK"] * work_target + ["off"] * (num_days - work_target)
 
-
-st.title("🏥 護理排班系統 (純區塊完美產出版)")
+st.title("🏥 護理排班系統 (滑動視窗動態修剪版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -120,7 +98,6 @@ if file_a and file_b:
         part_time_names = [n for n in all_names if staff_configs[n]["is_part_time"]]
         display_names = full_time_names + part_time_names
 
-        # 初始化假表
         bg_vacation = {n: ["R"] * num_days for n in display_names}
         
         xl = pd.ExcelFile(file_b)
@@ -151,7 +128,6 @@ if file_a and file_b:
                 for i in range(header_row_idx + 1, len(df_b)):
                     raw_cell_name = str(df_b.iloc[i, name_col_idx]).strip()
                     if not raw_cell_name or raw_cell_name == "nan" or "序號" in raw_cell_name: continue
-                    
                     clean_b_name = re.sub(r'[\s\u3000]', '', raw_cell_name)
                     
                     target_person = None
@@ -193,56 +169,90 @@ if file_a and file_b:
                     cont_days_final[n] = st.number_input(f"連續天數", 0, 6, 0, key=f"c_{n}")
 
         st.markdown("---")
-        if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
+        if st.button("🚀 啟動滑動視窗排班", type="primary", use_container_width=True):
             success_schedule = False
             final_res = {}
             next_month_history_row, next_month_streak_row = {}, {}
             ft_off_target = 9 if num_days >= 31 else 8
             
-            for attempt in range(2500):
+            # 滑動視窗動態修剪法求解迴圈
+            for attempt in range(1000):
                 valid_month = True
-                res = {k: [""] * num_days for k in display_names}
+                res = {k: ["off"] * num_days for k in display_names}
                 
-                for pt_name in part_time_names: res[pt_name] = schedule_part_time(num_days)
-                ft_block_skeletons = {n: schedule_full_time_blocks(num_days, ft_off_target) for n in full_time_names}
+                # 半職獨立排 10 天
+                for pt_name in part_time_names: 
+                    res[pt_name] = schedule_part_time(num_days)
+                    
                 total_off_counts = {n: 0 for n in full_time_names}
+                streak_tracker = {n: 0 for n in full_time_names}
                 
+                # ⚡ 核心演算法：滑動視窗逐日動態前進 ⚡
                 for d in range(num_days):
                     if not valid_month: break
+                    
+                    # 每日目標人數
                     target = {"D": 4, "E": 3, "N": 2}
                     for pt_name in part_time_names:
                         if res[pt_name][d] == "D": target["D"] -= 1
                     
-                    pool = []
-                    for n in full_time_names:
-                        if ft_block_skeletons[n][d] == "WORK": pool.append(n)
-                        else:
+                    # 重置昨天的連班狀態
+                    if d > 0:
+                        for n in full_time_names:
+                            if res[n][d-1] == "off":
+                                streak_tracker[n] = 0
+                    
+                    pool = [n for n in full_time_names]
+                    
+                    # 【修剪防線 1：強制滿 5 連班斷班】
+                    for n in pool.copy():
+                        if streak_tracker[n] >= 5:
                             res[n][d] = "off"
                             total_off_counts[n] += 1
-                    
+                            pool.remove(n)
+                            
+                    # 【修剪防線 2：核對同仁預約假（R）】
                     for n in pool.copy():
                         if bg_vacation[n][d] == "R":
                             res[n][d] = "off"
                             total_off_counts[n] += 1
                             pool.remove(n)
-                    
+                            
+                    # 【修剪防線 3：抬頭看明天 - 碎班防禦】
+                    # 如果今天被抓來上班，而「明天是預約假」，且「昨天是休假」，今天就不能上單天班，必須提前一起休！
+                    for n in pool.copy():
+                        prev_is_off = (res[n][d-1] == "off") if d > 0 else (history_final[n] == "off")
+                        next_is_vacation = (bg_vacation[n][d+1] == "R") if d < (num_days - 1) else False
+                        if prev_is_off and next_is_vacation:
+                            res[n][d] = "off"
+                            total_off_counts[n] += 1
+                            pool.remove(n)
+
+                    # 【修剪防線 4：填入同仁自己指定的預班】
                     for n in pool.copy():
                         v = bg_vacation[n][d]
                         if v in ["D", "E", "N"]:
                             if target[v] > 0 and v in perm_final[n]:
-                                res[n][d] = v; target[v] -= 1; pool.remove(n)
-                            else: valid_month = False 
+                                res[n][d] = v
+                                target[v] -= 1
+                                streak_tracker[n] += 1
+                                pool.remove(n)
+                            else:
+                                valid_month = False
                     
                     if not valid_month: break
-                    random.shuffle(pool)
                     
+                    # 智慧滑動視窗排序：正在連班中的人優先繼續排上班（形成區塊）、假休太多的人也優先拉出來上班
+                    random.shuffle(pool)
+                    pool.sort(key=lambda x: (streak_tracker[x] > 0, total_off_counts[x]), reverse=True)
+                    
+                    # 依序分派 N -> E -> D
                     for shift in ["N", "E", "D"]:
                         qualified = []
                         for n in pool:
                             if shift in perm_final[n]:
                                 prev_1 = res[n][d-1] if d > 0 else history_final[n]
-                                prev_2 = res[n][d-2] if d > 1 else "off"
-                                if shift == "D" and (prev_1 in ["N", "E"] or prev_2 == "N"): continue
+                                if shift == "D" and prev_1 in ["N", "E"]: continue
                                 if shift == "E" and prev_1 == "N": continue
                                 qualified.append(n)
                                 
@@ -250,25 +260,25 @@ if file_a and file_b:
                             if qualified:
                                 chosen = qualified.pop(0)
                                 res[chosen][d] = shift
+                                streak_tracker[chosen] += 1
                                 pool.remove(chosen)
                             else:
                                 valid_month = False; break
                         if not valid_month: break
                                 
-                    # ⚡ 核心修正防線：清理池子裡沒被分派班別卻帶有 WORK 骨架的同仁，強制作為安全清洗
+                    # 當天沒被分配到班的人，全部進修假
                     for n in pool:
-                        if target["D"] > 0: 
-                            res[n][d] = "D"
-                            target["D"] -= 1
-                        else:
-                            # 人力爆滿或死鎖時，安全清除為 off
-                            res[n][d] = "off"
-                            total_off_counts[n] += 1
+                        res[n][d] = "off"
+                        total_off_counts[n] += 1
 
+                # 月底大驗證：檢查總休假是否為 8/9 天、且完全無單天碎班
                 if valid_month:
                     for n in full_time_names:
-                        # ⚡ 雙重防線：最後檢查，確保 res 的陣列裡完全不殘留 "WORK" 或空白字串，有殘留則判定此輪失敗
-                        if total_off_counts[n] != ft_off_target or "WORK" in res[n] or "" in res[n]: 
+                        if total_off_counts[n] != ft_off_target: 
+                            valid_month = False; break
+                        
+                        days_str = "".join(["0" if res[n][x] == "off" else "1" for x in range(num_days)])
+                        if "010" in days_str or days_str.startswith("10") or days_str.endswith("01"):
                             valid_month = False; break
 
                 if valid_month:
@@ -284,9 +294,9 @@ if file_a and file_b:
                     break
             
             if not success_schedule or not final_res:
-                st.error("⚠️ 原始區塊條件極度嚴格。在不打破『正職2-5天/半職2-3天』且絕不上單天碎班的鐵律下，本輪嘗試未能配出。請檢查預排休表中是否有某些日子大家集體劃假（超過4人以上），微調錯開後就能順暢產出！")
+                st.error("⚠️ 滑動視窗動態匹配失敗。請確認每日空白人數少於 4 人後再次點擊啟動！")
             else:
-                st.success(f"🎉 {start_date.month}月份純區塊建議班表已完美噴出！")
+                st.success(f"🎉 成功！【滑動視窗動態修剪法】已完美產出 {start_date.month} 月份區塊班表。")
                 final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers    
                 
@@ -298,8 +308,8 @@ if file_a and file_b:
                 
                 out = BytesIO()
                 with pd.ExcelWriter(out, engine='xlsxwriter') as w: 
-                    final_df.to_excel(w, sheet_name=f"{start_date.month}月建議班表")
-                st.download_button(label="📥 下載完整 Excel 班表", data=out.getvalue(), file_name=f"2F_Schedule_{start_date.month}M.xlsx", use_container_width=True)
+                    final_df.to_excel(w, sheet_name=f"{start_date.month}月動態建議班表")
+                st.download_button(label="📥 下載滑動視窗版 Excel 班表", data=out.getvalue(), file_name=f"2F_SlidingWindow_Schedule_{start_date.month}M.xlsx", use_container_width=True)
 
     except Exception as e:
         st.error(f"系統解析錯誤: {e}")
