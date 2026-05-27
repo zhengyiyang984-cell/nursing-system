@@ -291,3 +291,70 @@ if file_a and file_b:
 
     except Exception as e:
         st.error(f"系統解析錯誤: {e}")
+# ... (前半部保持不變)
+
+        if st.button("🚀 啟動精準 4/3/2 排班", type="primary", use_container_width=True):
+            success_schedule = False
+            final_res = {}
+            next_month_history_row, next_month_streak_row = {}, {}
+            ft_off_target = 9 
+            
+            critical_days = [18, 19, 20, 21] 
+            
+            for attempt in range(5000):
+                valid_month = True
+                res = {str(k): ["off"] * num_days for k in display_names}
+                
+                # 初始化郭珍君 (PT)
+                for pt_name in part_time_names:
+                    # 郭珍君：在 19-22 號強制上D班，其餘隨機分派到湊滿 10 天
+                    for d in range(num_days):
+                        if d in critical_days: res[pt_name][d] = "D"
+                
+                total_off_counts = {str(n): 0 for n in full_time_names}
+                streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
+                
+                for d in range(num_days):
+                    if not valid_month: break
+                    
+                    # 每日目標：正職需填滿 4D, 3E, 2N (郭珍君已佔 1 個 D)
+                    target = {"D": 4 - (1 if d in critical_days else 0), "E": 3, "N": 2}
+                    
+                    if d > 0:
+                        for n in full_time_names:
+                            if res[str(n)][d-1] == "off": streak_tracker[str(n)] = 0
+                    
+                    pool = [str(n) for n in full_time_names]
+                    
+                    # 轉班規則檢查函數
+                    def can_transit(prev, shift):
+                        # D接DEN，E接EN，N接offoff
+                        if prev == "off": return True
+                        if prev == "D": return shift in ["D", "E", "N"]
+                        if prev == "E": return shift in ["E", "N"]
+                        if prev == "N": return shift == "off" # 強制 N 後接 off
+                        return True
+
+                    # 1. 執行排班分派
+                    # 優先指派預班與規則檢查...
+                    # (以下填入你的核心排班迴圈)
+                    
+                    # ⚡ 關鍵：每日結束核對
+                    if target["D"] != 0 or target["E"] != 0 or target["N"] != 0:
+                        valid_month = False; break
+                
+                # 最終驗證 (確認所有規則皆符合)
+                if valid_month:
+                    # 檢查郭珍君是否剛好 10 天白班
+                    if sum(1 for d in range(num_days) if res[part_time_names[0]][d] == "D") != 10:
+                        continue
+                        
+                    final_res = {str(k): v for k, v in res.items()}
+                    success_schedule = True; break
+
+            if not success_schedule:
+                st.error("⚠️ 排班求解失敗：無法在 4/3/2 人力鐵律下完成配置，請調整預約班別。")
+            else:
+                # 成功產出結果...
+                st.success("🎉 排班成功！")
+                # ... (後續 DataFrame 與 Excel 邏輯)
