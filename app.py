@@ -170,17 +170,59 @@ if file_a and file_b:
                                 pool.remove(str(n))
                     
                     # 2. 戰術落實：
-                    if d in critical_days:
+                   # --- [替換邏輯開始] ---
+                    # 1. 5連班斷班檢查
+                    if d > 0:
                         for n in pool.copy():
-                            if n in real_vacation_staff:
+                            if streak_tracker[str(n)] >= 5:
                                 res[str(n)][d] = "off"
                                 total_off_counts[str(n)] += 1
-                                pool.remove(str(n))
-                    else:
-                        if d in pre_days or d in post_days:
-                            for n in pool.copy():
-                                if n in combat_staff:
-                                    res[str(n)][d] = "off"
+                                if n in pool: pool.remove(n)
+
+                    # 2. 戰術與預排處理
+                    # 先處理特殊排班需求，確保難排的人優先獲得分配
+                    for n in pool.copy():
+                        if d in critical_days and n in real_vacation_staff:
+                            res[str(n)][d] = "off"
+                            total_off_counts[str(n)] += 1
+                            if n in pool: pool.remove(n)
+                        elif ironed_vacation[str(n)][d] == "R":
+                            res[str(n)][d] = "off"
+                            total_off_counts[str(n)] += 1
+                            if n in pool: pool.remove(n)
+
+                    # 3. 核心優化：權限優先分配 (貪婪邏輯)
+                    # 權限範圍越小(len)的人越優先，避免最後剩下一堆沒人能上的班別
+                    pool.sort(key=lambda x: len(perm_final[str(x)]))
+                    
+                    # 嘗試填補 D, E, N
+                    for shift in ["D", "E", "N"]:
+                        # 篩選出今天可以上此班的人 (權限符合且未在 pool 中被移除)
+                        candidates = [n for n in pool if shift in perm_final[str(n)]]
+                        
+                        # 依據連班狀況排序：連班越少的人越優先被選，避免過勞
+                        candidates.sort(key=lambda x: streak_tracker[str(x)])
+
+                        while target[shift] > 0 and candidates:
+                            chosen = candidates.pop(0)
+                            
+                            # 檢查連班限制 (如：夜班後接白班)
+                            prev_1 = res[str(chosen)][d-1] if d > 0 else history_final[str(chosen)]
+                            if d not in critical_days:
+                                if shift == "D" and prev_1 in ["N", "E"]: continue
+                                if shift == "E" and prev_1 == "N": continue
+                            
+                            res[str(chosen)][d] = shift
+                            streak_tracker[str(chosen)] += 1
+                            pool.remove(chosen)
+                            target[shift] -= 1
+                    
+                    # 4. 剩餘人員強制休假
+                    for n in pool.copy():
+                        res[str(n)][d] = "off"
+                        total_off_counts[str(n)] += 1
+                        pool.remove(n)
+                    # --- [替換邏輯結束] ---
                                     total_off_counts[str(n)] += 1
                                     pool.remove(str(n))
                         
