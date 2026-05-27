@@ -217,14 +217,12 @@ if file_a and file_b:
                             pool.remove(chosen)
                             target[shift] -= 1
                     
-                    # 4. 剩餘人員強制休假
+                   # 4. 剩餘人員強制休假
                     for n in pool.copy():
                         res[str(n)][d] = "off"
                         total_off_counts[str(n)] += 1
-                        pool.remove(n)
+                        pool.remove(str(n))
                     # --- [替換邏輯結束] ---
-                                total_off_counts[str(n)] += 1
-                                    pool.remove(str(n))
                         
                         for n in pool.copy():
                             if ironed_vacation[str(n)][d] == "R":
