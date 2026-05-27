@@ -223,7 +223,7 @@ if file_a and file_b:
                         total_off_counts[str(n)] += 1  # 確保這行的縮排與上面那行完全對齊
                         pool.remove(n)
                     # --- [替換邏輯結束] ---
-                                    total_off_counts[str(n)] += 1
+                                total_off_counts[str(n)] += 1
                                     pool.remove(str(n))
                         
                         for n in pool.copy():
