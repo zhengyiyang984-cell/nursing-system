@@ -9,84 +9,57 @@ st.set_page_config(page_title="2F 護理排班系統", layout="wide")
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
+# 2F 全科室標準 13 人核心真名白名單 (用來核對基本班表與預排休)
+CORE_STAFF_NAMES = [
+    "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
+    "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
+    "汪家容", "林欣儀", "林怡薇"
+]
+
 # --- 1. 基本班表解析 ---
 def get_staff_configs(file):
     df = pd.read_excel(file, header=None)
     configs = {}
     
-    start_row = 0
-    for r in range(min(15, len(df))):
-        row_str = "".join(str(v) for v in df.iloc[r].values)
-        if "姓名" in row_str or "職級" in row_str:
-            start_row = r
-            break
-
-    headers_row = df.iloc[start_row].tolist()
-    
-    hist_col_idx = -1
-    streak_col_idx = -1
-    for idx, h in enumerate(headers_row):
-        h_str = str(h).strip()
-        if "系統接續_最後班別" in h_str: hist_col_idx = idx
-        if "系統接續_連續天數" in h_str: streak_col_idx = idx
-
-    for i in range(start_row + 1, len(df)):
-        row = df.iloc[i]
-        if len(row) < 3: continue
+    # 逐行地毯式白名單搜尋
+    for i in range(len(df)):
+        row_str = "".join(str(v) for v in df.iloc[i].values)
         
-        c0 = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
-        c1 = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
-        c2 = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
-        
-        combined_text = f"{c0}{c1}{c2}"
-        if any(k in combined_text for k in ["---", "每日人力", "總人數", "核對", "白班", "小夜", "大夜", "下月接續", "統計", "合計"]):
+        # 排除統計、合計、核對等雜訊行
+        if any(k in row_str for k in ["---", "每日人力", "總人數", "核對", "統計", "合計"]):
             continue
-
-        staff_name = ""
-        for cell_val in [c2, c1, c0]:
-            if cell_val and not cell_val.replace(".0", "").isdigit() and "半職" not in cell_val and cell_val != "nan":
-                staff_name = cell_val
-                break
-        
-        if not staff_name: continue
             
-        pure_name = re.sub(r'[\s\u3000]', '', staff_name)
-        # 用正則表達式把人名後面殘留的職級(如PN2、PN3)通通拔掉，只留乾淨的純中文名字
-        pure_name = re.sub(r'[a-zA-Z0-9]', '', pure_name)
-        
-        if not pure_name: continue
-        
-        is_pt = (pure_name == "郭珍君")
-        
-        pure_perm = "DEN"
-        for p_check in [c0, c1]:
-            p_check_upper = str(p_check).upper()
-            if any(s in p_check_upper for s in ["D", "E", "N"]) and not str(p_check).replace(".0", "").isdigit():
-                pure_perm = p_check_upper
+        # 檢查這一行有沒有包含 13 人白名單中的任何一個名字
+        matched_name = None
+        for name in CORE_STAFF_NAMES:
+            if name in row_str:
+                matched_name = name
                 break
-
-        last_day = "off"
-        loaded_streak = 0
-
-        if hist_col_idx != -1 and hist_col_idx < len(row) and pd.notna(row.iloc[hist_col_idx]):
-            last_day = str(row.iloc[hist_col_idx]).strip().replace(".0", "")
-        if streak_col_idx != -1 and streak_col_idx < len(row) and pd.notna(row.iloc[streak_col_idx]):
-            try: loaded_streak = int(float(row.iloc[streak_col_idx]))
-            except: loaded_streak = 0
-
-        # 防呆過濾：如果上傳的最後班別長得很奇怪（例如DE），強制洗乾淨成標準字母
-        last_day_upper = last_day.upper()
-        if "D" in last_day_upper: last_day = "D"
-        elif "E" in last_day_upper: last_day = "E"
-        elif "N" in last_day_upper: last_day = "N"
-        else: last_day = "off"
-
-        configs[pure_name] = {
-            "perm": pure_perm,
-            "last_day": last_day,
-            "streak": loaded_streak,
-            "is_part_time": is_pt
-        }
+                
+        if matched_name:
+            # 找到了對應的人！開始抓取她這一行的權限班別
+            row_cells = [str(v).strip() for v in df.iloc[i].values if pd.notna(v)]
+            row_cells_upper = [c.upper() for c in row_cells]
+            
+            # 預設權限
+            pure_perm = "DEN"
+            for cell in row_cells_upper:
+                # 排除單純的數字或序號，找尋包含 D/E/N 的權限字串
+                if any(s in cell for s in ["D", "E", "N"]) and not cell.replace(".0", "").isdigit() and len(cell) <= 4:
+                    if cell in ["DEN", "DE", "EN", "DN", "D", "E", "N"]:
+                        pure_perm = cell
+                        break
+            
+            is_pt = (matched_name == "郭珍君")
+            
+            # 固定指派預設值，防堵下拉選單 ValueError
+            configs[matched_name] = {
+                "perm": pure_perm,
+                "last_day": "off", # 預設切回 off
+                "streak": 0,
+                "is_part_time": is_pt
+            }
+            
     return configs
 
 # --- 2. 區塊循環排班演算法 ---
@@ -137,7 +110,7 @@ def schedule_full_time_blocks(num_days, max_off_target):
     return ["WORK"] * work_target + ["off"] * (num_days - work_target)
 
 
-st.title("🏥 護理排班系統 (無痛防退格卡死版)")
+st.title("🏥 護理排班系統 (白名單精準解鎖版)")
 
 with st.sidebar:
     st.header("📅 排班月份設定")
@@ -153,63 +126,54 @@ with st.sidebar:
 
 if file_a and file_b:
     try:
+        # 載入基本班表設定
         staff_configs = get_staff_configs(file_a)
         all_names = list(staff_configs.keys())
         full_time_names = [n for n in all_names if not staff_configs[n]["is_part_time"]]
         part_time_names = [n for n in all_names if staff_configs[n]["is_part_time"]]
         display_names = full_time_names + part_time_names
 
+        # 初始化假表
         bg_vacation = {n: ["R"] * num_days for n in display_names}
         
         xl = pd.ExcelFile(file_b)
         active_sheet_name = ""
         found_sheet = False
         
+        # 遍歷頁籤，自動跳過規範說明頁
         for sheet_name in xl.sheet_names:
             if any(k in sheet_name for k in ["規範", "說明", "填寫", "使用", "欄位"]):
                 continue
                 
             df_b = pd.read_excel(file_b, sheet_name=sheet_name, header=None)
             
-            # 建立動態模糊雷達：自動對齊姓名與日期網格
-            name_col_idx = 1       
-            date_start_idx = 2     
+            name_col_idx = 1       # 固定第二欄為姓名
+            date_start_idx = 2     # 固定第三欄為 1 號
             header_row_idx = 0     
             
+            # 精準網格定位確認
             for r in range(min(10, len(df_b))):
-                row_vals_clean = [str(v).strip().replace(".0", "") for v in df_b.iloc[r].values]
-                for c_idx, val in enumerate(row_vals_clean):
-                    if "姓名" in val:
-                        name_col_idx = c_idx
-                        header_row_idx = r
-                        for d_idx in range(name_col_idx + 1, len(row_vals_clean)):
-                            if row_vals_clean[d_idx] == "1":
-                                date_start_idx = d_idx
-                                found_sheet = True
-                                active_sheet_name = sheet_name
-                                break
-                    if found_sheet: break
-                if found_sheet: break
-                
-            if not found_sheet:
-                name_col_idx = 1
-                date_start_idx = 2
-                header_row_idx = 0
-                found_sheet = True
-                active_sheet_name = sheet_name
-            
+                vals = [str(v).strip() for v in df_b.iloc[r].values]
+                if "姓名" in vals:
+                    name_col_idx = vals.index("姓名")
+                    date_start_idx = name_col_idx + 1
+                    header_row_idx = r
+                    found_sheet = True
+                    active_sheet_name = sheet_name
+                    break
+                    
             if found_sheet:
+                # 抓取假表
                 for i in range(header_row_idx + 1, len(df_b)):
                     raw_cell_name = str(df_b.iloc[i, name_col_idx]).strip()
                     if not raw_cell_name or raw_cell_name == "nan" or "序號" in raw_cell_name: continue
                     
                     clean_b_name = re.sub(r'[\s\u3000]', '', raw_cell_name)
-                    # 假表端的名字也同樣要把可能殘留的 PN1/PN2/PN3 英數字給連根拔起，確保兩邊純中文互對
-                    clean_b_name = re.sub(r'[a-zA-Z0-9]', '', clean_b_name)
                     
+                    # 用白名單去勾稽假表端的名字
                     target_person = None
                     for name in display_names:
-                        if name in clean_b_name or clean_b_name in name:
+                        if name in clean_b_name:
                             target_person = name; break
                     
                     if target_person:
@@ -224,13 +188,15 @@ if file_a and file_b:
                                     bg_vacation[target_person][d] = "R"
                 break
 
-        st.success(f"🎉 成功讀取假表！鎖定頁籤：【{active_sheet_name}】。")
+        if len(display_names) > 0:
+            st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員！已成功綁定假表分頁：【{active_sheet_name}】。")
+        else:
+            st.error("❌ 錯誤：無法從基本班表中讀取到任何護理同仁姓名，請確認班表格式！")
 
         st.subheader("⚙️ 核對權限與銜接狀態")
         history_final, perm_final, cont_days_final = {}, {}, {}
         cols = st.columns(4)
         
-        # 標準下拉清單
         standard_shifts = ["D", "E", "N", "off", "v", "R"]
         
         for i, n in enumerate(display_names):
@@ -241,15 +207,8 @@ if file_a and file_b:
                     perm_final[n] = raw_perm.strip().upper().replace(",", "").replace(" ", "")
                     if not perm_final[n]: perm_final[n] = "DEN"
                     
-                    # ⚡ 終極無痛安全鎖：如果歷史班別不在清單內，index自動切回 3 (也就是 off)，絕不當機！
-                    raw_last_day = staff_configs[n]["last_day"]
-                    if raw_last_day in standard_shifts:
-                        default_idx = standard_shifts.index(raw_last_day)
-                    else:
-                        default_idx = 3 # 預設為 off
-                        
-                    history_final[n] = st.selectbox(f"上次班別", standard_shifts, index=default_idx, key=f"h_{n}")
-                    cont_days_final[n] = st.number_input(f"連續天數", 0, 6, int(staff_configs[n]["streak"]), key=f"c_{n}")
+                    history_final[n] = st.selectbox(f"上次班別", standard_shifts, index=3, key=f"h_{n}")
+                    cont_days_final[n] = st.number_input(f"連續天數", 0, 6, 0, key=f"c_{n}")
 
         st.markdown("---")
         if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
