@@ -1,860 +1,333 @@
 import streamlit as st
-
 import pandas as pd
-
 import random
-
 from io import BytesIO
-
 import datetime
-
 import re
-
-
 
 st.set_page_config(page_title="2F 護理排班系統", layout="wide")
 
-
-
 # 中文星期對照表
-
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
+# 2F 全科室標準 13 人核心真名白名單
+CORE_STAFF_NAMES = [
+    "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
+    "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
+    "汪家容", "林欣儀", "林怡薇"
+]
 
-
-# --- 1. 背景解析與格式防呆 ---
-
+# --- 1. 基本班表解析 ---
 def get_staff_configs(file):
-
     df = pd.read_excel(file, header=None)
-
     configs = {}
-
     
-
-    start_row = 0
-
-    for r in range(min(15, len(df))):
-
-        row_str = "".join(str(v) for v in df.iloc[r].values)
-
-        if "姓名" in row_str or "職級" in row_str:
-
-            start_row = r
-
-            break
-
-
-
-    headers_row = df.iloc[start_row].tolist()
-
-    
-
-    hist_col_idx = -1
-
-    streak_col_idx = -1
-
-    for idx, h in enumerate(headers_row):
-
-        h_str = str(h).strip()
-
-        if "系統接續_最後班別" in h_str: hist_col_idx = idx
-
-        if "系統接續_連續天數" in h_str: streak_col_idx = idx
-
-
-
-    for i in range(start_row + 1, len(df)):
-
-        row = df.iloc[i]
-
-        if len(row) < 3: continue
-
-        
-
-        c0 = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
-
-        c1 = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
-
-        c2 = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
-
-        
-
-        combined_text = f"{c0}{c1}{c2}"
-
-        if any(k in combined_text for k in ["---", "每日人力", "總人數", "核對", "白班", "小夜", "大夜", "下月接續", "統計", "合計"]):
-
+    for i in range(len(df)):
+        row_str = "".join(str(v) for v in df.iloc[i].values)
+        if any(k in row_str for k in ["---", "每日人力", "總人數", "核對", "統計", "合計"]):
             continue
-
-        if "星期" in combined_text or "姓名" in combined_text:
-
-            continue
-
-
-
-        is_valid_staff = False
-
-        target_label = ""
-
-        staff_name = ""
-
-        
-
-        for cell_val in [c0, c1, c2]:
-
-            clean_cell = cell_val.replace(".0", "")
-
-            if clean_cell.isdigit() and 1 <= int(clean_cell) <= 13:
-
-                is_valid_staff = True
-
-                target_label = str(clean_cell)
-
-                break
-
-            elif "半職" in cell_val:
-
-                is_valid_staff = True
-
-                target_label = "半職1"
-
-                break
-
+            
+        matched_name = None
+        for name in CORE_STAFF_NAMES:
+            if name in row_str:
+                matched_name = name; break
                 
-
-        if not is_valid_staff:
-
-            continue
-
-
-
-        for cell_val in [c2, c1, c0]:
-
-            if cell_val and not cell_val.replace(".0", "").isdigit() and "半職" not in cell_val and cell_val != "nan":
-
-                staff_name = cell_val
-
-                break
-
-        if not staff_name: staff_name = target_label
-
-
-
-        display_label = str(target_label)
-
-        is_pt = "半職" in display_label
-
-        
-
-        pure_perm = "DEN"
-
-        for p_check in [c0, c1]:
-
-            p_check_upper = p_check.upper()
-
-            if any(s in p_check_upper for s in ["D", "E", "N"]) and not p_check.replace(".0", "").isdigit():
-
-                pure_perm = p_check_upper
-
-                break
-
-
-
-        last_day = "off"
-
-        loaded_streak = 0
-
-
-
-        if hist_col_idx != -1 and hist_col_idx < len(row) and pd.notna(row.iloc[hist_col_idx]):
-
-            last_day = str(row.iloc[hist_col_idx]).strip()
-
-        if streak_col_idx != -1 and streak_col_idx < len(row) and pd.notna(row.iloc[streak_col_idx]):
-
-            try: loaded_streak = int(float(row.iloc[streak_col_idx]))
-
-            except: loaded_streak = 0
-
+        if matched_name:
+            row_cells = [str(v).strip() for v in df.iloc[i].values if pd.notna(v)]
+            row_cells_upper = [c.upper() for c in row_cells]
             
-
-        if last_day == "off" and loaded_streak == 0:
-
-            raw_cells = [str(c).strip().upper() for c in row.values[3:] if pd.notna(c)]
-
-            valid_shifts = []
-
-            for cell in raw_cells:
-
-                if cell in ["D", "E", "N", "OFF", "V", "R"]:
-
-                    valid_shifts.append(cell)
-
-                elif any(k in cell for k in ["休", "假", "會", "訓", "●", "0"]):
-
-                    valid_shifts.append("OFF")
-
+            pure_perm = "DEN"
+            for cell in row_cells_upper:
+                if any(s in cell for s in ["D", "E", "N"]) and not cell.replace(".0", "").isdigit() and len(cell) <= 4:
+                    if cell in ["DEN", "DE", "EN", "DN", "D", "E", "N"]:
+                        pure_perm = cell; break
             
-
-            if valid_shifts:
-
-                pure_month_shifts = valid_shifts[:31]
-
-                if pure_month_shifts:
-
-                    last_c = pure_month_shifts[-1]
-
-                    last_day = last_c if last_c in ["D", "E", "N"] else "off"
-
-                    
-
-                    s_count = 0
-
-                    for cell_val in reversed(pure_month_shifts):
-
-                        if cell_val in ["D", "E", "N"]:
-
-                            s_count += 1
-
-                        else:
-
-                            break
-
-                    loaded_streak = s_count
-
-
-
-        if last_day not in ["D", "E", "N", "off", "v", "R"]: last_day = "off"
-
-        pure_id = re.sub(r'[\s\u3000]', '', staff_name)
-
-
-
-        configs[display_label] = {
-
-            "pure_id": pure_id,
-
-            "perm": pure_perm,
-
-            "last_day": last_day,
-
-            "streak": loaded_streak,
-
-            "is_part_time": is_pt
-
-        }
-
+            is_pt = (matched_name == "郭珍君")
+            configs[matched_name] = {
+                "perm": pure_perm,
+                "last_day": "off",
+                "streak": 0,
+                "is_part_time": is_pt
+            }
     return configs
 
 
-
-def schedule_part_time(num_days):
-
-    for _ in range(100):
-
-        days = ["off"] * num_days
-
-        available_patterns = [[2, 2, 2, 2, 2], [3, 3, 2, 2], [3, 2, 3, 2], [2, 3, 2, 3], [2, 2, 3, 3]]
-
-        work_blocks = random.choice(available_patterns)
-
-        random.shuffle(work_blocks) 
-
-        
-
-        current_idx = random.randint(0, 2) 
-
-        success = True
-
-        
-
-        for block in work_blocks:
-
-            if current_idx + block > num_days:
-
-                success = False
-
-                break
-
-            for _ in range(block):
-
-                if current_idx < num_days:
-
-                    days[current_idx] = "D"
-
-                    current_idx += 1
-
-            current_idx += random.randint(2, 4)
-
-            
-
-        if success and days.count("D") == 10:
-
-            days_str = "".join(["1" if d == "D" else "0" for d in days])
-
-            if "1111" not in days_str and "010" not in days_str and not days_str.startswith("10") and not days_str.endswith("01"):
-
-                return days
-
-                
-
-    backup_days = ["off"] * num_days
-
-    for idx in [2, 3, 4, 9, 10, 15, 16, 17, 22, 23]:
-
-        if idx < num_days: backup_days[idx] = "D"
-
-    return backup_days
-
-
-
-st.title("🏥 護理排班系統")
-
-
+st.title("🏥 護理排班系統 (半職動態捕手精準 4/3/2 版)")
 
 with st.sidebar:
-
-    st.header("📂 檔案上傳與日期設定")
-
-    today = datetime.date.today()
-
-    start_date = st.date_input("排班開始日期", today.replace(day=1))
-
-    end_date = st.date_input("排班結束日期", today.replace(day=28) + datetime.timedelta(days=3))
-
+    st.header("📅 排班月份設定")
+    start_date = st.date_input("排班開始日期", datetime.date(2026, 6, 1))
+    end_date = st.date_input("排班結束日期", datetime.date(2026, 6, 30))
     
+    num_days = (end_date - start_date).days + 1
+    date_headers = [f"{d.month}/{d.day} ({WEEKDAYS_CHINESE[d.weekday()]})" for d in [(start_date + datetime.timedelta(days=x)) for x in range(num_days)]]
+    st.info(f"📅 系統偵測：本月共計 {num_days} 天")
+    
+    file_a = st.file_uploader("1. 上傳【基本班表】", type=["xlsx"])
+    file_b = st.file_uploader("2. 上傳【預排休表】", type=["xlsx"])
 
-    if start_date <= end_date:
-
-        date_objects = [start_date + datetime.timedelta(days=x) for x in range((end_date - start_date).days + 1)]
-
-        num_days = len(date_objects)
-
-        date_headers = [f"{d.month}/{d.day} ({WEEKDAYS_CHINESE[d.weekday()]})" for d in date_objects]
-
-        st.info(f"📅 本次排班共計：{num_days} 天")
-
-    else:
-
-        st.error("⚠️ 錯誤：結束日期不能早於開始日期！")
-
-        num_days = 0
-
-
-
-    file_a = st.file_uploader("1. 上傳【班表】", type=["xlsx"])
-
-    file_b = st.file_uploader("2. 上傳【預班表】", type=["xlsx"])
-
-
-
-if file_a and file_b and num_days > 0:
+if file_a and file_b:
     try:
         staff_configs = get_staff_configs(file_a)
         all_names = list(staff_configs.keys())
-        
-        # --- 姓名導向：無需強制轉換 int ---
-        full_time_names = sorted([n for n in all_names if not staff_configs[n]["is_part_time"]])
-        part_time_names = [n for n in all_names if staff_configs[n]["is_part_time"]]
+        full_time_names = [str(n) for n in all_names if not staff_configs[n]["is_part_time"]]
+        part_time_names = [str(n) for n in all_names if staff_configs[n]["is_part_time"]]
         display_names = full_time_names + part_time_names
 
-        df_b = pd.read_excel(file_b, header=None)
         bg_vacation = {n: [""] * num_days for n in display_names}
-        for i in range(len(df_b)):
-            # 確保抓取第三欄位(index=2)的姓名並比對
-            b_name = re.sub(r'[\s\u3000]', '', str(df_b.iloc[i, 2]))
-            for n in display_names:
-                if staff_configs[n]["pure_id"] == b_name or n == b_name:
-                    for d in range(num_days):
-                        val = str(df_b.iloc[i, d+3]).strip().upper() if (d+3) < len(df_b.columns) else ""
-                        if val in ["R", "OFF", "V", "開會", "0", "●", "公假", "特休"]: bg_vacation[n][d] = "R"
-                        elif val in ["D", "E", "N"]: bg_vacation[n][d] = val
-                    break
-
-        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員。")
-
-        st.subheader("⚙️ 核對權限與銜接狀態")
-        history_final, perm_final, cont_days_final = {}, {}, {}
-        cols = st.columns(4)
         
-        for i, n in enumerate(display_names):
-            with cols[i % 4]:
-                with st.container(border=True):
-                    st.markdown(f"👤 **人員：{n}**")
-                    # 將原本的 text_input 改為更靈活的選擇器
-                    perm_final[n] = st.multiselect(f"可排班別", ["D", "E", "N"], default=["D", "E", "N"], key=f"p_{n}")
-                    
-                    history_final[n] = st.selectbox(f"上次班別", ["D", "E", "N", "off", "v", "R"], 
-                                                     index=["D", "E", "N", "off", "v", "R"].index(staff_configs[n]["last_day"]), 
-                                                     key=f"h_{n}")
-                    cont_days_final[n] = st.number_input(f"連續天數", 0, 7, int(staff_configs[n]["streak"]), key=f"c_{n}")
-
-        st.markdown("---")
-        if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
-            # 這裡繼續您原本的排班邏輯，因為現在字典 Key 是 n (姓名)，直接兼容
-            # ... (您的 1500 次嘗試迴圈) ...
+        xl = pd.ExcelFile(file_b)
+        active_sheet_name = "未指定分頁" 
+        found_sheet = False
+        
+        for sheet_name in xl.sheet_names:
+            if any(k in sheet_name for k in ["規範", "說明", "填寫", "使用", "欄位"]):
+                continue
+                
+            df_b = pd.read_excel(file_b, sheet_name=sheet_name, header=None)
             
-            # 在迴圈內的分配邏輯中，加入權重加權(可選):
-            # pool.sort(key=lambda n: (7 - total_off_counts.get(n, 0)), reverse=True)
-
-
-        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員。")
-
-
+            name_col_idx = 1       
+            date_start_idx = 2     
+            header_row_idx = 0     
+            
+            for r in range(min(10, len(df_b))):
+                vals = [str(v).strip() for v in df_b.iloc[r].values]
+                if "姓名" in vals:
+                    name_col_idx = vals.index("姓名")
+                    date_start_idx = name_col_idx + 1
+                    header_row_idx = r
+                    found_sheet = True
+                    active_sheet_name = sheet_name 
+                    break
+                    
+            if found_sheet:
+                for i in range(header_row_idx + 1, len(df_b)):
+                    raw_cell_name = str(df_b.iloc[i, name_col_idx]).strip()
+                    if not raw_cell_name or raw_cell_name == "nan" or "序號" in raw_cell_name: continue
+                    clean_b_name = re.sub(r'[\s\u3000]', '', raw_cell_name)
+                    
+                    target_person = None
+                    for name in display_names:
+                        if name in clean_b_name:
+                            target_person = name; break
+                    
+                    if target_person:
+                        for d in range(num_days):
+                            col_pos = date_start_idx + d
+                            if col_pos < len(df_b.columns):
+                                cell_val = str(df_b.iloc[i, col_pos]).strip().upper()
+                                if "D" in cell_val and "R" not in cell_val:
+                                    bg_vacation[target_person][d] = "D"
+                                elif "E" in cell_val:
+                                    bg_vacation[target_person][d] = "E"
+                                elif "N" in cell_val:
+                                    bg_vacation[target_person][d] = "N"
+                                elif "R" in cell_val or "OFF" in cell_val or "V" in cell_val or "●" in cell_val or cell_val == "NAN" or cell_val == "":
+                                    bg_vacation[target_person][d] = "R"
+                break
 
         st.subheader("⚙️ 核對權限與銜接狀態")
-
         history_final, perm_final, cont_days_final = {}, {}, {}
-
         cols = st.columns(4)
-
         
-
+        standard_shifts = ["D", "E", "N", "off", "v", "R"]
         for i, n in enumerate(display_names):
-
             with cols[i % 4]:
-
                 with st.container(border=True):
-
-                    st.markdown(f"🔢 **人員序號：{n}**")
-
+                    st.markdown(f"👤 **同仁姓名：{n}**")
                     raw_perm = st.text_input(f"權限", value=staff_configs[n]["perm"], key=f"p_{n}")
-
                     perm_final[n] = raw_perm.strip().upper().replace(",", "").replace(" ", "")
-
                     if not perm_final[n]: perm_final[n] = "DEN"
-
                     
-
-                    history_final[n] = st.selectbox(f"上次班別", ["D", "E", "N", "off", "v", "R"], 
-
-                                                   index=["D", "E", "N", "off", "v", "R"].index(staff_configs[n]["last_day"]), 
-
-                                                   key=f"h_{n}")
-
-                    cont_days_final[n] = st.number_input(f"連續天數", 0, 6, int(staff_configs[n]["streak"]), key=f"c_{n}")
-
-
+                    history_final[n] = st.selectbox(f"上次班別", standard_shifts, index=3, key=f"h_{n}")
+                    cont_days_final[n] = st.number_input(f"連續天數", 0, 6, 0, key=f"c_{n}")
 
         st.markdown("---")
-
-        if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
-
+        
+        warning_placeholder = st.container()
+        
+        if st.button("🚀 啟動精準 4/3/2 排班", type="primary", use_container_width=True):
             success_schedule = False
-
             final_res = {}
-
-            next_month_history_row = {}
-
-            next_month_streak_row = {}
-
+            next_month_history_row, next_month_streak_row = {}, {}
+            ft_off_target = 9 if num_days >= 31 else 8
             
-
-            for attempt in range(1500):
-
+            revoked_log = []
+            
+            # 啟動大型主循環
+            for attempt in range(3000):
                 valid_month = True
-
-                res = {str(n): [""] * num_days for n in display_names}
-
-                for pt_name in part_time_names:
-
-                    res[pt_name] = schedule_part_time(num_days)
-
-
-
+                res = {str(k): ["off"] * num_days for k in display_names}
+                
+                # 動態複製假表
+                ironed_vacation = {n: bg_vacation[n].copy() for n in display_names}
+                
                 total_off_counts = {str(n): 0 for n in full_time_names}
-
                 streak_tracker = {str(n): int(cont_days_final[n]) for n in full_time_names}
-
                 
-
-                for n in full_time_names:
-
-                    if history_final[n] == "N":
-
-                        if num_days > 0 and bg_vacation[n][0] == "D": valid_month = False
-
-                        if num_days > 1 and bg_vacation[n][1] == "D": valid_month = False
-
+                # 半職郭珍君的總上班天數計數器，本月必須精準等於 10 天
+                pt_work_days_count = 0
                 
-
-                if not valid_month:
-
-                    continue
-
-
-
                 for d in range(num_days):
-
                     if not valid_month: break
-
                     
-
+                    # 💡 核心策略改寫：【每日人力目標動態捕手系統】 
+                    # 預設正職要把白班塞滿 4 個人
                     target = {"D": 4, "E": 3, "N": 2}
-
-                    for pt_name in part_time_names:
-
-                        if res[pt_name][d] == "D": target["D"] -= 1
-
                     
-
-                    pool = [str(n) for n in full_time_names if res[n][d] not in ["off", "v"]]
-
-                    
-
                     if d > 0:
-
                         for n in full_time_names:
-
-                            if res[n][d-1] in ["off", "v", "R"]:
-
-                                streak_tracker[n] = 0
-
-
-
-                    # 5連班斷班
-
+                            if res[str(n)][d-1] == "off":
+                                streak_tracker[str(n)] = 0
+                    
+                    # 今天可以動用的正職名單
+                    pool = [str(name_item).strip() for name_item in full_time_names]
+                    
+                    # 1. 正職滿 5 連班者強制斷班放假
                     for n in pool.copy():
-
-                        if streak_tracker[n] >= 5: 
-
-                            res[n][d] = "off"
-
-                            total_off_counts[n] += 1
-
-                            if n in pool: pool.remove(n)
-
-
-
-                    # 全視角即時碎班阻斷防線
-
-                    if attempt < 500:
-
-                        for n in pool.copy():
-
-                            prev_is_off = (res[n][d-1] in ["off", "v", "R"]) if d > 0 else (history_final[n] in ["off", "v", "R"])
-
-                            next_must_off = (bg_vacation[n][d+1] == "R") if d < (num_days - 1) else False
-
-                            if prev_is_off and next_must_off:
-
-                                res[n][d] = "off"
-
-                                total_off_counts[n] += 1
-
-                                if n in pool: pool.remove(n)
-
-
-
-                    # 每週一休
-
-                    real_day = d + 1
-
-                    current_week_start_idx = (d // 7) * 7
-
-                    if real_day % 7 == 0:
-
-                        for n in full_time_names:
-
-                            if n not in pool: continue
-
-                            has_off_this_week = any(res[n][w_d] in ["off", "v", "R"] for w_d in range(current_week_start_idx, d))
-
-                            if not has_off_this_week:
-
-                                res[n][d] = "off"
-
-                                total_off_counts[n] += 1
-
-                                if n in pool: pool.remove(n)
-
-
-
-                    # 填入預約假與預班
-
+                        if streak_tracker[str(n)] >= 5:
+                            res[str(n)][d] = "off"
+                            total_off_counts[str(n)] += 1
+                            pool.remove(str(n))
+                            
+                    # 2. 數一下此時正職 pool 裡，扣掉要請假(R)的人之後，剩幾個活人
+                    active_ft_workers = [n for n in pool if ironed_vacation[n][d] != "R"]
+                    
+                    # ⚡ 關鍵捕手救援點 ⚡：如果發現今天正職扣掉請假後，人數小於 9 個人 (4D+3E+2N)
+                    # 且郭珍君目前累積上班還沒滿 10 天，今天就「強制徵調郭珍君上白班」！
+                    if len(active_ft_workers) < 9 and pt_work_days_count < 10:
+                        for pt_name in part_time_names:
+                            res[pt_name][d] = "D"
+                        pt_work_days_count += 1
+                        target["D"] -= 1 # 白班缺口減少 1 人，壓力釋放！
+                    
+                    # 3. 萬一半職出動了，正職請假人數還是大爆炸（可用人數依然不夠），再動態微調正職假
+                    total_required = target["D"] + target["E"] + target["N"]
+                    while len([n for n in pool if ironed_vacation[n][d] != "R"]) < total_required:
+                        v_workers = [n for n in pool if ironed_vacation[n][d] == "R"]
+                        if not v_workers: break
+                        v_workers.sort(key=lambda x: total_off_counts[str(x)], reverse=True)
+                        fired_person = v_workers[0]
+                        ironed_vacation[fired_person][d] = "" 
+                        msg = f"⚠️ {d+1}號 劃假人數大撞車，半職捕手補位後仍有缺口，系統已徵調正職【{fired_person}】出勤維護 4/3/2 標準。"
+                        if msg not in revoked_log: revoked_log.append(msg)
+                    
+                    # 4. 處理剩餘放假的正職
                     for n in pool.copy():
+                        if ironed_vacation[str(n)][d] == "R":
+                            res[str(n)][d] = "off"
+                            total_off_counts[str(n)] += 1
+                            pool.remove(str(n))
 
-                        v = bg_vacation[n][d]
-
+                    # 5. 指定預班處理
+                    for n in pool.copy():
+                        v = ironed_vacation[str(n)][d]
                         if v in ["D", "E", "N"]:
-
-                            if target[v] > 0:
-
-                                prev_1 = res[n][d-1] if d > 0 else history_final[n]
-
-                                prev_2 = res[n][d-2] if d > 1 else "off"
-
-                                
-
-                                if (prev_1 == "N" or prev_2 == "N") and v == "D":
-
-                                    valid_month = False
-
-                                elif prev_1 == "E" and v == "D":
-
-                                    valid_month = False
-
-                                else:
-
-                                    res[n][d] = v
-
-                                    target[v] -= 1
-
-                                    streak_tracker[n] += 1
-
-                                    pool.remove(n)
-
+                            if target[v] > 0 and v in perm_final[str(n)]:
+                                res[str(n)][d] = v
+                                target[v] -= 1
+                                streak_tracker[str(n)] += 1
+                                pool.remove(str(n))
                             else:
-
                                 valid_month = False
-
-
-
+                    
                     if not valid_month: break
-
-
-
-                    # 動態融斷降級人力核對
-
-                    needed_slots = sum(max(0, target[s]) for s in ["N", "E", "D"])
-
-                    if len(pool) < needed_slots:
-
-                        while len(pool) < (target["N"] + target["E"] + target["D"]):
-
-                            if target["D"] > 0: target["D"] -= 1
-
-                            elif target["E"] > 0: target["E"] -= 1
-
-                            elif target["N"] > 0: target["N"] -= 1
-
-                            else: break
-
-
-
+                    
+                    # 6. 分派空白正職
                     random.shuffle(pool)
-
-                    pool.sort(key=lambda x: total_off_counts[x], reverse=True)
-
-
-
-                    # 分派班別
-
+                    current_pool_order = sorted(pool, key=lambda x: (streak_tracker[str(x)] > 0, total_off_counts[str(x)]), reverse=True)
+                    
                     for shift in ["N", "E", "D"]:
-
                         qualified = []
-
-                        for n in pool:
-
-                            if shift in perm_final[n]:
-
-                                prev_1 = res[n][d-1] if d > 0 else history_final[n]
-
-                                prev_2 = res[n][d-2] if d > 1 else "off"
-
+                        for n in current_pool_order:
+                            if str(n) in pool and shift in perm_final[str(n)]:
+                                prev_1 = res[str(n)][d-1] if d > 0 else history_final[str(n)]
+                                if shift == "D" and prev_1 in ["N", "E"]: continue
+                                if shift == "E" and prev_1 == "N": continue
+                                qualified.append(str(n))
                                 
-
-                                if shift == "D" and (prev_1 == "N" or prev_2 == "N"): continue
-
-                                if shift == "D" and prev_1 == "E": continue
-
-                                    
-
-                                qualified.append(n)
-
-                                    
-
                         for _ in range(max(0, target[shift])):
-
                             if qualified:
-
                                 chosen = qualified.pop(0)
-
-                                res[chosen][d] = shift
-
-                                streak_tracker[chosen] += 1
-
-                                if chosen in pool: pool.remove(chosen)
-
-                    
-
+                                res[str(chosen)][d] = shift
+                                streak_tracker[str(chosen)] += 1
+                                pool.remove(str(chosen))
+                                target[shift] -= 1
+                            else:
+                                if pool:
+                                    fallback = pool.pop(0)
+                                    res[str(fallback)][d] = shift
+                                    streak_tracker[str(fallback)] += 1
+                                    target[shift] -= 1
+                                else:
+                                    valid_month = False; break
+                        if not valid_month: break
+                                
                     for n in pool:
-
-                        res[n][d] = "off"
-
-                        total_off_counts[n] += 1
-
+                        res[str(n)][d] = "off"
+                        total_off_counts[str(n)] += 1
                         
+                    # 人力精準總核對
+                    if target["D"] != 0 or target["E"] != 0 or target["N"] != 0:
+                        valid_month = False
 
-                # 最終單天班大檢驗
+                # 💡 月底結算：如果半職郭珍君這個月上班天數不剛好等於 10 天，此輪也作廢重來！
+                if pt_work_days_count != 10:
+                    valid_month = False
 
-                if valid_month and attempt < 500:
-
+                # 月底總休假天數大驗證
+                if valid_month:
                     for n in full_time_names:
-
-                        days_str = "".join(["0" if res[n][x] in ["off", "v", "R"] else "1" for x in range(num_days)])
-
+                        if total_off_counts[str(n)] != ft_off_target: 
+                            valid_month = False; break
+                        
+                        days_str = "".join(["0" if res[str(n)][x] == "off" else "1" for x in range(num_days)])
                         if "010" in days_str or days_str.startswith("10") or days_str.endswith("01"):
+                            valid_month = False; break
 
-                            valid_month = False
-
-                            break
-
-
-
-                if valid_month and all(total_off_counts[n] >= 7 for n in full_time_names):
-
+                if valid_month:
                     final_res = {str(k): v for k, v in res.items()}
-
                     for n in display_names:
-
-                        next_month_history_row[str(n)] = res[n][-1]
-
+                        next_month_history_row[str(n)] = str(res[str(n)][-1])
                         s_count = 0
-
-                        for cell_b in reversed(res[n]):
-
+                        for cell_b in reversed(res[str(n)]):
                             if cell_b in ["D", "E", "N"]: s_count += 1
-
                             else: break
-
-                        if s_count == num_days and res[n][0] in ["D", "E", "N"]:
-
-                            s_count += int(cont_days_final[n])
-
                         next_month_streak_row[str(n)] = s_count
-
                     success_schedule = True
-
                     break
-
             
-
+            # --- 網頁渲染與輸出 ---
+            # ⚡ 徹底移除壞掉的保底機制，不成功便成仁，確保輸出的數據一定是完美的！
             if not success_schedule or not final_res:
-
-                st.error("⚠️ 當前各人員的預約假過於密集。在死鎖每日4D/3E/2N人力與『正職不上單天班』的法規限制下本輪未能配出。請再次點擊按鈕重試，或微調預班表再按一次！")
-
+                st.error("⚠️ 錯誤：在維持正職每人剛好休 8/9 天、且半職精準只上 10 天白班的鐵律下大死鎖。請點擊上方按鈕再次啟動重試，或是讓阿長微調衝突的指定預班！")
             else:
-
-                st.success("🎉 排班成功。")
-
+                if revoked_log:
+                    with warning_placeholder:
+                        for log in revoked_log:
+                            st.warning(log)
+                            
+                st.success(f"🎉 完美通關！半職捕手已動態補位，全月每日均完美對齊『4白班（含半職）、3小夜、2大夜』的鋼鐵比例！")
                 
-
-                final_df = pd.DataFrame(final_res) 
-
-                final_df = final_df.T              
-
+                final_df = pd.DataFrame(final_res).T
                 final_df.columns = date_headers    
-
+                final_df["總休假天數"] = final_df.apply(lambda row: sum(1 for c in row if str(c).lower() in ["off", "v", "r"]), axis=1)
                 
-
-                final_df.index = final_df.index.astype(str)
-
-                str_display_names = [str(n) for n in display_names]
-
+                last_day_list, streak_list = [], []
+                for n in final_df.index:
+                    raw_last = next_month_history_row.get(str(n), "off")
+                    last_day_list.append(raw_last if raw_last in ["D", "E", "N"] else "off")
+                    streak_list.append(next_month_streak_row.get(str(n), 0))
+                        
+                final_df["系統接續_最後班別"] = last_day_list
+                final_df["系統接續_連續天數"] = streak_list
                 
-
-                def count_off_days(row):
-
-                    return sum(1 for cell in row if str(cell).lower() in ["off", "v", "r"])
-
-                
-
-                final_df["總休假天數"] = final_df.apply(count_off_days, axis=1)
-
-                final_df["系統接續_最後班別"] = [next_month_history_row[n] for n in str_display_names]
-
-                final_df["系統接續_連續天數"] = [next_month_streak_row[n] for n in str_display_names]
-
-                
-
-                stat_rows = {}
-
-                for header in date_headers:
-
-                    col_data = final_df[header]
-
-                    count_d = sum(1 for cell in col_data if str(cell).upper() == "D")
-
-                    count_e = sum(1 for cell in col_data if str(cell).upper() == "E")
-
-                    count_n = sum(1 for cell in col_data if str(cell).upper() == "N")
-
-                    stat_rows[header] = {"白班": count_d, "小夜": count_e, "大夜": count_n}
-
-                df_stats = pd.DataFrame(stat_rows)
-
-                
-
-                st.subheader("🎉 最終排班結果")
-
                 st.dataframe(final_df, use_container_width=True)
-
                 
-
-                df_stats_extended = df_stats.copy()
-
-                df_stats_extended["總休假天數"] = ""
-
-                df_stats_extended["系統接續_最後班別"] = ""
-
-                df_stats_extended["系統接續_連續天數"] = ""
-
-                
-
-                empty_row = pd.Series([None] * len(final_df.columns), index=final_df.columns)
-
-                
-
-                # 建立要匯出至 Excel 的完整 DataFrame
-
-                download_df = pd.concat([
-
-                    final_df,
-
-                    pd.DataFrame([empty_row], columns=final_df.columns),
-
-                    pd.DataFrame([["--- 每日人力總人數核對 ---"] + [""] * (len(final_df.columns)-1)], columns=final_df.columns),
-
-                    df_stats_extended
-
-                ])
-
-
-
-                # --- 統一使用 xlsxwriter 引擎進行二進位匯出 ---
-
                 out = BytesIO()
-
                 with pd.ExcelWriter(out, engine='xlsxwriter') as w: 
-
-                    download_df.to_excel(w, sheet_name="2F綜合建議班表")
-
-                    
-
-                st.markdown("---")
-
-                st.subheader("📥 完整排班結果輸出")
-
-                st.download_button(
-
-                    label="📥 下載完整 Excel 班表", 
-
-                    data=out.getvalue(), 
-
-                    file_name=f"2F_Schedule_Final_{start_date}.xlsx",
-
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-
-                    use_container_width=True
-
-                )
-
-                st.balloons()
-
-
+                    final_df.to_excel(w, sheet_name=f"{start_date.month}月精準建議班表")
+                st.download_button(label="📥 下載最終精準 4/3/2 Excel 班表", data=out.getvalue(), file_name=f"2F_Perfect_Schedule_{start_date.month}M.xlsx", use_container_width=True)
 
     except Exception as e:
-
-        st.error(f"系統解析錯誤: {e}") 
-
+        st.error(f"系統解析錯誤: {e}")
