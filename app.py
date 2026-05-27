@@ -349,45 +349,53 @@ with st.sidebar:
 
 
 if file_a and file_b and num_days > 0:
-
     try:
-
         staff_configs = get_staff_configs(file_a)
-
         all_names = list(staff_configs.keys())
-
         
-
-        full_time_names = sorted([str(n) for n in all_names if not staff_configs[n]["is_part_time"]], key=lambda x: int(x))
-
-        part_time_names = [str(n) for n in all_names if staff_configs[n]["is_part_time"]]
-
+        # --- 姓名導向：無需強制轉換 int ---
+        full_time_names = sorted([n for n in all_names if not staff_configs[n]["is_part_time"]])
+        part_time_names = [n for n in all_names if staff_configs[n]["is_part_time"]]
         display_names = full_time_names + part_time_names
 
-
-
         df_b = pd.read_excel(file_b, header=None)
-
         bg_vacation = {n: [""] * num_days for n in display_names}
-
         for i in range(len(df_b)):
-
+            # 確保抓取第三欄位(index=2)的姓名並比對
             b_name = re.sub(r'[\s\u3000]', '', str(df_b.iloc[i, 2]))
-
             for n in display_names:
-
                 if staff_configs[n]["pure_id"] == b_name or n == b_name:
-
                     for d in range(num_days):
-
                         val = str(df_b.iloc[i, d+3]).strip().upper() if (d+3) < len(df_b.columns) else ""
-
                         if val in ["R", "OFF", "V", "開會", "0", "●", "公假", "特休"]: bg_vacation[n][d] = "R"
-
                         elif val in ["D", "E", "N"]: bg_vacation[n][d] = val
-
                     break
 
+        st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員。")
+
+        st.subheader("⚙️ 核對權限與銜接狀態")
+        history_final, perm_final, cont_days_final = {}, {}, {}
+        cols = st.columns(4)
+        
+        for i, n in enumerate(display_names):
+            with cols[i % 4]:
+                with st.container(border=True):
+                    st.markdown(f"👤 **人員：{n}**")
+                    # 將原本的 text_input 改為更靈活的選擇器
+                    perm_final[n] = st.multiselect(f"可排班別", ["D", "E", "N"], default=["D", "E", "N"], key=f"p_{n}")
+                    
+                    history_final[n] = st.selectbox(f"上次班別", ["D", "E", "N", "off", "v", "R"], 
+                                                     index=["D", "E", "N", "off", "v", "R"].index(staff_configs[n]["last_day"]), 
+                                                     key=f"h_{n}")
+                    cont_days_final[n] = st.number_input(f"連續天數", 0, 7, int(staff_configs[n]["streak"]), key=f"c_{n}")
+
+        st.markdown("---")
+        if st.button("🚀 啟動自動排班", type="primary", use_container_width=True):
+            # 這裡繼續您原本的排班邏輯，因為現在字典 Key 是 n (姓名)，直接兼容
+            # ... (您的 1500 次嘗試迴圈) ...
+            
+            # 在迴圈內的分配邏輯中，加入權重加權(可選):
+            # pool.sort(key=lambda n: (7 - total_off_counts.get(n, 0)), reverse=True)
 
 
         st.success(f"✅ 成功辨識全科共 {len(display_names)} 位人員。")
