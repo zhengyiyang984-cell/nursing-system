@@ -234,43 +234,47 @@ if file_a and file_b:
 
         
 
-        if st.button("🚀 啟動排班", type="primary", use_container_width=True):
-            # 預先計算每日最大可用人力
-            daily_available = [0] * num_days
-            for d in range(num_days):
-                for n in full_time_names:
-                    if bg_vacation[n][d] != "R": daily_available[d] += 1
-            
-            # 檢查極端缺口
-            shortage_days = [d+1 for d, count in enumerate(daily_available) if count < 9]
-            if shortage_days:
-                st.warning(f"⚠️ 警告：以下日期正職人力不足 9 人 (無法滿足 4/3/2)：{shortage_days}，系統將盡力補足但不保證完美。")
-
-            # 增加一個變數儲存「最接近」的結果
-            best_res = None
-            min_gap = 999 
-
-            for attempt in range(10000): # 縮減次數以優化回應速度
-                # ... [保留原本的循環邏輯，但在結束時計算 gap]
+       if st.button("🚀 啟動排班", type="primary", use_container_width=True):
+            try:
+                # 預先計算每日最大可用人力
+                daily_available = [0] * num_days
+                for d in range(num_days):
+                    for n in full_time_names:
+                        if bg_vacation[n][d] != "R": daily_available[d] += 1
                 
-                current_gap = 0
-                # 計算當前方案與 4/3/2 的誤差
-                # ... (在 validation 階段加入 current_gap 計算)
-                
-                if current_gap < min_gap:
-                    min_gap = current_gap
-                    best_res = {k: v[:] for k, v in res.items()}
-                
-                if min_gap == 0: break # 完美解
+                # 檢查極端缺口
+                shortage_days = [d+1 for d, count in enumerate(daily_available) if count < 9]
+                if shortage_days:
+                    st.warning(f"⚠️ 警告：以下日期正職人力不足 9 人 (無法滿足 4/3/2)：{shortage_days}，系統將盡力補足但不保證完美。")
 
-            if best_res:
-                if min_gap > 0:
-                    st.error(f"⚠️ 系統已運算完畢，但無法達到完美 4/3/2 配置，誤差值為 {min_gap}。")
+                # 增加一個變數儲存「最接近」的結果
+                best_res = None
+                min_gap = 999 
+
+                for attempt in range(2000): # 為了穩定性，先跑 2000 次
+                    # ... [原本的排班邏輯] ...
+                    # 假設在這裡計算出了目前的 res 和 gap
+                    current_gap = 0 # 請確保你有計算 gap 的邏輯
+                    
+                    if current_gap < min_gap:
+                        min_gap = current_gap
+                        best_res = {k: v[:] for k, v in res.items()}
+                    
+                    if min_gap == 0: break # 完美解
+
+                # 處理結果顯示
+                if best_res:
+                    if min_gap > 0:
+                        st.error(f"⚠️ 系統已運算完畢，但無法達到完美 4/3/2 配置，誤差值為 {min_gap}。")
+                    else:
+                        st.success("🎉 完美通關！")
+                    
+                    # 這裡放後續繪製表格與 Excel 下載的邏輯
+                    final_df = pd.DataFrame(best_res).T
+                    final_df.columns = date_headers    
+                    st.dataframe(final_df, use_container_width=True)
                 else:
-                    st.success("🎉 完美通關！")
-                except Exception as e:
-                # 當排班邏輯出錯時，顯示錯誤訊息給使用者
-                st.error(f"排班運算過程中發生錯誤: {e}")
-                # 繪製表格邏輯...
- 
+                    st.error("⚠️ 未能產生有效班表，請嘗試調整條件。")
 
+            except Exception as e:
+                st.error(f"排班運算過程中發生錯誤: {e}")
