@@ -627,14 +627,14 @@ if file_a and file_b:
                 )
                 with tabs[1]:
 
-                manpower_rows = []
+                    manpower_rows = []
 
-                for d in range(num_days):
+                    for d in range(num_days):
 
-                    d_count = 0
-                    e_count = 0
-                    n_count = 0
-                    m_count = 0
+                        d_count = 0
+                        e_count = 0
+                        n_count = 0
+                        m_count = 0
 
                     for nurse in names:
 
