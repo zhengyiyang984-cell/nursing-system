@@ -753,11 +753,11 @@ if file_a and file_b:
                     night_df,
                     use_container_width=True
                 )
-                                        with tabs[4]:
+                with tabs[4]:
 
-                issues = []
+                    issues = []
 
-                for nurse in names:
+                    for nurse in names:
 
                     total_rest = sum(
                         1
