@@ -268,7 +268,9 @@ if file_a and file_b:
                     st.error(f"⚠️ 系統已運算完畢，但無法達到完美 4/3/2 配置，誤差值為 {min_gap}。")
                 else:
                     st.success("🎉 完美通關！")
-                
+                except Exception as e:
+                # 當排班邏輯出錯時，顯示錯誤訊息給使用者
+                st.error(f"排班運算過程中發生錯誤: {e}")
                 # 繪製表格邏輯...
  
 
