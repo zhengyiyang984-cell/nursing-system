@@ -643,25 +643,31 @@ if file_a and file_b:
         # 顯示自動抓取結果
         # =====================
 
-        preview_rows = []
+permissions = {}
+history_shift = {}
+history_streak = {}
 
-        for nurse in names:
+for _, row in config_df.iterrows():
 
-            preview_rows.append({
+    nurse = row["姓名"]
 
-                "姓名": nurse,
-                "權限": staffs[nurse]["permission"],
-                "上月最後班": staffs[nurse]["last_shift"],
-                "已連班": staffs[nurse]["last_streak"]
+    permissions[nurse] = str(
+        row["權限"]
+    ).upper()
 
-            })
+    history_shift[nurse] = str(
+        row["上月最後班"]
+    )
 
-        st.subheader("🔍 自動抓取結果")
+    history_streak[nurse] = int(
+        row["已連上天數"]
+    )
 
-        st.data_editor(
-            pd.DataFrame(preview_rows),
-            use_container_width=True
-        )    
+config_df = st.data_editor(
+    pd.DataFrame(config_rows),
+    use_container_width=True,
+    num_rows="fixed"
+)
 
         permissions = {
             n: staffs[n]["permission"]
