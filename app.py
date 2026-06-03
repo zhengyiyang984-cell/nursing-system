@@ -575,7 +575,7 @@ if file_a and file_b:
                     df,
                     use_container_width=True
                 )
-                                        with tabs[1]:
+                with tabs[1]:
 
                 manpower_rows = []
 
