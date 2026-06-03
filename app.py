@@ -79,41 +79,72 @@ def can_work_shift(permission, shift):
 # 讀取基本班表
 # =====================================
 
-def load_base_schedule(upload_file):
+def load_history_from_base_schedule(
+    upload_file,
+    staffs
+):
 
     df = pd.read_excel(
         upload_file,
         header=None
     )
 
-    staffs = {}
-
     for r in range(len(df)):
 
         row = [
-            str(x)
+            str(x).strip()
             for x in df.iloc[r].values
         ]
 
         row_text = "".join(row)
 
-        for name in CORE_STAFF_NAMES:
+        target = None
 
-            if name in row_text:
+        for nurse in staffs.keys():
 
-                permission = "DEN"
+            if nurse in row_text:
 
-                for cell in row:
+                target = nurse
+                break
 
-                    p = parse_permission(cell)
+        if not target:
+            continue
 
-                    if p:
-                        permission = p
+        shifts = []
 
-                staffs[name] = {
-                    "permission": permission,
-                    "part_time": name == "郭珍君"
-                }
+        for cell in row:
+
+            cell = str(cell).upper()
+
+            if cell in [
+                "D",
+                "E",
+                "N",
+                "OFF",
+                "R",
+                "M"
+            ]:
+
+                shifts.append(cell)
+
+        if len(shifts) == 0:
+            continue
+
+        staffs[target]["last_shift"] = shifts[-1]
+
+        streak = 0
+
+        for s in reversed(shifts):
+
+            if s in ["D", "E", "N"]:
+
+                streak += 1
+
+            else:
+
+                break
+
+        staffs[target]["last_streak"] = streak
 
     return staffs
     # =====================================
@@ -603,8 +634,56 @@ if file_a and file_b:
     try:
 
         staffs = load_base_schedule(file_a)
-        
+
+        staffs = load_history_from_base_schedule(
+            file_a,
+            staffs
+        )
+
         names = list(staffs.keys())
+
+        # =====================
+        # 顯示自動抓取結果
+        # =====================
+
+        preview_rows = []
+
+        for nurse in names:
+
+            preview_rows.append({
+
+                "姓名": nurse,
+                "權限": staffs[nurse]["permission"],
+                "上月最後班": staffs[nurse]["last_shift"],
+                "已連班": staffs[nurse]["last_streak"]
+
+            })
+
+        st.subheader("🔍 自動抓取結果")
+
+        st.data_editor(
+            pd.DataFrame(preview_rows),
+            use_container_width=True
+        )    
+
+        permissions = {
+            n: staffs[n]["permission"]
+            for n in names
+        }
+
+        history_shift = {
+            n: staffs[n]["last_shift"]
+            for n in names
+        }
+
+        history_streak = {
+            n: staffs[n]["last_streak"]
+            for n in names
+        }
+
+        num_days = (
+            end_date - start_date
+        ).days + 1
 
         st.subheader("⚙️ 人員權限與上月銜接設定")
         config_rows = []
@@ -625,8 +704,15 @@ if file_a and file_b:
         )
 
         permissions = {}
-        history_shift = {}
-        history_streak = {}
+      history_shift = {
+          n: staffs[n]["last_shift"]
+          for n in names
+      }
+
+      history_streak = {
+          n: staffs[n]["last_streak"]
+          for n in names
+      }
 
         for _, row in config_df.iterrows():
 
