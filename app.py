@@ -577,7 +577,7 @@ if file_a and file_b:
                 )
                 with tabs[1]:
 
-                manpower_rows = []
+            manpower_rows = []
 
                 for d in range(num_days):
 
