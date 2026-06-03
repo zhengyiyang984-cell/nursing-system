@@ -759,11 +759,11 @@ if file_a and file_b:
 
                     for nurse in names:
 
-                    total_rest = sum(
-                        1
-                        for x in result[nurse]
-                        if x in ["off","R"]
-                    )
+                        total_rest = sum(
+                            1
+                            for x in result[nurse]
+                            if x in ["off","R"]
+                        )
 
                     if total_rest < 8:
 
