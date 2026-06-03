@@ -610,7 +610,7 @@ if file_a and file_b:
                         m_count
                     ])
 
-                manpower_df = pd.DataFrame(
+            manpower_df = pd.DataFrame(
                     manpower_rows,
                     columns=[
                         "日期",
