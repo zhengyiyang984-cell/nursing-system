@@ -677,9 +677,9 @@ if file_a and file_b:
                 )
                 with tabs[2]:
 
-                holiday_rows = []
+                    holiday_rows = []
 
-                for nurse in names:
+                    for nurse in names:
 
                     r_count = sum(
                         1
