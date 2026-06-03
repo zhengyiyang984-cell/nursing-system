@@ -35,6 +35,55 @@ CORE_STAFF_NAMES = [
     "林欣儀",
     "林怡薇"
 ]
+def load_base_schedule(upload_file):
+
+    df = pd.read_excel(
+        upload_file,
+        header=None
+    )
+
+    staffs = {}
+
+    for r in range(len(df)):
+
+        row = [
+            str(x).strip()
+            for x in df.iloc[r].values
+        ]
+
+        row_text = "".join(row)
+
+        for nurse in CORE_STAFF_NAMES:
+
+            if nurse in row_text:
+
+                permission = "DEN"
+
+                for cell in row:
+
+                    cell = str(cell).upper()
+
+                    if cell in [
+                        "D",
+                        "E",
+                        "N",
+                        "DE",
+                        "DN",
+                        "EN",
+                        "DEN"
+                    ]:
+                        permission = cell
+
+                staffs[nurse] = {
+
+                    "permission": permission,
+                    "last_shift": "off",
+                    "last_streak": 0,
+                    "part_time": nurse == "郭珍君"
+
+                }
+
+    return staffs
 # =====================================
 # 權限解析
 # =====================================
@@ -79,7 +128,10 @@ def can_work_shift(permission, shift):
 # 讀取基本班表
 # =====================================
 
-def load_base_schedule(upload_file):
+def load_history_from_base_schedule(
+    upload_file,
+    staffs
+):
 
     df = pd.read_excel(
         upload_file,
@@ -134,11 +186,8 @@ def load_base_schedule(upload_file):
         for s in reversed(shifts):
 
             if s in ["D", "E", "N"]:
-
                 streak += 1
-
             else:
-
                 break
 
         staffs[target]["last_streak"] = streak
