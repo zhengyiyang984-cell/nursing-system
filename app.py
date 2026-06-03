@@ -229,10 +229,10 @@ def parse_permission(text):
     n_min
 ):
 
-    schedule = {
-        n:[""] * num_days
-        for n in names
-    }
+        schedule = {
+            n:[""] * num_days
+            for n in names
+        }
 
     night_count = {
         n:0
