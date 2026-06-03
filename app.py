@@ -817,7 +817,7 @@ if file_a and file_b:
                         issue_df,
                         use_container_width=True
                     )
-                        except Exception as e:
+                    except Exception as e:
 
         st.error(
             f"系統錯誤：{e}"
