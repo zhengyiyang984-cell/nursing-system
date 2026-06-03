@@ -92,14 +92,14 @@ def parse_permission(text):
         num_days
 ):
 
-    result = {
-        n: [""] * num_days
-        for n in names
-    }
+        result = {
+            n: [""] * num_days
+            for n in names
+        }
 
-    xl = pd.ExcelFile(file)
+        xl = pd.ExcelFile(file)
 
-    sheet = xl.sheet_names[0]
+        sheet = xl.sheet_names[0]
 
     df = pd.read_excel(
         file,
