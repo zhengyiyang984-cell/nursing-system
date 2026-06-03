@@ -681,11 +681,11 @@ if file_a and file_b:
 
                     for nurse in names:
 
-                    r_count = sum(
-                        1
-                        for x in result[nurse]
-                        if x == "R"
-                    )
+                        r_count = sum(
+                            1
+                            for x in result[nurse]
+                            if x == "R"
+                        )
 
                     off_count = sum(
                         1
