@@ -575,7 +575,57 @@ if file_a and file_b:
                     df,
                     use_container_width=True
                 )
-                with tabs[1]:
+            with tabs[1]:
+
+                    manpower_rows = []
+
+                    for d in range(num_days):
+
+                        d_count = 0
+                        e_count = 0
+                        n_count = 0
+                        m_count = 0
+
+                        for nurse in names:
+
+                            shift = result[nurse][d]
+
+                        if shift == "D":
+                            d_count += 1
+
+                        elif shift == "E":
+                            e_count += 1
+
+                        elif shift == "N":
+                            n_count += 1
+
+                        elif shift == "M":
+                            m_count += 1
+
+                    manpower_rows.append([
+                        date_headers[d],
+                        d_count,
+                        e_count,
+                        n_count,
+                        m_count
+                    ])
+
+                manpower_df = pd.DataFrame(
+                    manpower_rows,
+                    columns=[
+                        "日期",
+                        "D",
+                        "E",
+                        "N",
+                        "M"
+                    ]
+                )
+
+                st.dataframe(
+                    manpower_df,
+                    use_container_width=True
+                )
+            with tabs[2]:
 
                     manpower_rows = []
 
@@ -625,57 +675,7 @@ if file_a and file_b:
                     manpower_df,
                     use_container_width=True
                 )
-                with tabs[1]:
-
-                    manpower_rows = []
-
-                    for d in range(num_days):
-
-                        d_count = 0
-                        e_count = 0
-                        n_count = 0
-                        m_count = 0
-
-                    for nurse in names:
-
-                        shift = result[nurse][d]
-
-                        if shift == "D":
-                            d_count += 1
-
-                        elif shift == "E":
-                            e_count += 1
-
-                        elif shift == "N":
-                            n_count += 1
-
-                        elif shift == "M":
-                            m_count += 1
-
-                    manpower_rows.append([
-                        date_headers[d],
-                        d_count,
-                        e_count,
-                        n_count,
-                        m_count
-                    ])
-
-                manpower_df = pd.DataFrame(
-                    manpower_rows,
-                    columns=[
-                        "日期",
-                        "D",
-                        "E",
-                        "N",
-                        "M"
-                    ]
-                )
-
-                st.dataframe(
-                    manpower_df,
-                    use_container_width=True
-                )
-                with tabs[2]:
+            with tabs[3]:
 
                     holiday_rows = []
 
@@ -687,18 +687,18 @@ if file_a and file_b:
                             if x == "R"
                         )
 
-                    off_count = sum(
-                        1
-                        for x in result[nurse]
-                        if x == "off"
-                    )
+                        off_count = sum(
+                            1
+                            for x in result[nurse]
+                            if x == "off"
+                        )
 
-                    holiday_rows.append([
-                        nurse,
-                        r_count,
-                        off_count,
-                        r_count + off_count
-                    ])
+                        holiday_rows.append([
+                            nurse,
+                            r_count,
+                            off_count,
+                            r_count + off_count
+                        ])
 
                 holiday_df = pd.DataFrame(
                     holiday_rows,
@@ -714,7 +714,7 @@ if file_a and file_b:
                     holiday_df,
                     use_container_width=True
                 )
-                with tabs[3]:
+            with tabs[4]:
 
                     night_rows = []
 
@@ -726,18 +726,18 @@ if file_a and file_b:
                             if x == "E"
                         )
 
-                    n_count = sum(
-                        1
-                        for x in result[nurse]
-                        if x == "N"
-                    )
+                        n_count = sum(
+                            1
+                            for x in result[nurse]
+                            if x == "N"
+                        )
 
-                    night_rows.append([
-                        nurse,
-                        e_count,
-                        n_count,
-                        e_count + n_count
-                    ])
+                        night_rows.append([
+                            nurse,
+                            e_count,
+                            n_count,
+                            e_count + n_count
+                        ])
 
                 night_df = pd.DataFrame(
                     night_rows,
@@ -753,7 +753,7 @@ if file_a and file_b:
                     night_df,
                     use_container_width=True
                 )
-                with tabs[4]:
+            with tabs[5]:
 
                     issues = []
 
@@ -817,7 +817,7 @@ if file_a and file_b:
                         issue_df,
                         use_container_width=True
                     )
-                        except Exception as e:
+                    except Exception as e:
 
         st.error(
             f"系統錯誤：{e}"
