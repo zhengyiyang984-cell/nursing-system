@@ -56,34 +56,34 @@ def parse_permission(text):
     return "DEN"
     def load_base_schedule(upload_file):
 
-    df = pd.read_excel(
+        df = pd.read_excel(
         upload_file,
         header=None
-    )
+        )
 
-    staffs = {}
+        staffs = {}
 
-    for r in range(len(df)):
+        for r in range(len(df)):
 
-        row = [str(x) for x in df.iloc[r].values]
+            row = [str(x) for x in df.iloc[r].values]
 
-        for name in CORE_STAFF_NAMES:
+            for name in CORE_STAFF_NAMES:
 
-            if name in "".join(row):
+                if name in "".join(row):
 
-                perm = "DEN"
+                    perm = "DEN"
 
-                for c in row:
+                    for c in row:
 
-                    p = parse_permission(c)
+                        p = parse_permission(c)
 
-                    if p:
-                        perm = p
+                        if p:
+                            perm = p
 
-                staffs[name] = {
-                    "perm": perm,
-                    "part_time": name == "郭珍君"
-                }
+                    staffs[name] = {
+                        "perm": perm,
+                        "part_time": name == "郭珍君"
+                    }
 
     return staffs
     def load_request_table(
