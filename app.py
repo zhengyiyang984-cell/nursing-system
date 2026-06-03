@@ -277,4 +277,4 @@ if file_a and file_b:
                     st.error("⚠️ 未能產生有效班表，請嘗試調整條件。")
 
             except Exception as e:
-                st.error(f"排班運算過程中發生錯誤: {e}")
+                st.error(f"排班運算過程中發生錯誤:{e}")
