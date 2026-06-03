@@ -163,7 +163,7 @@ def parse_permission(text):
             "off",
             "M"
         ]:
-        return True
+            return True
 
     return shift in permission
     with st.sidebar:
