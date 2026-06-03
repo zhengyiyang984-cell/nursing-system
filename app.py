@@ -606,7 +606,7 @@ if file_a and file_b:
         
         names = list(staffs.keys())
 
-         st.subheader("⚙️ 人員權限與上月銜接設定")
+        st.subheader("⚙️ 人員權限與上月銜接設定")
                 config_rows = []
 
         for nurse in names:
