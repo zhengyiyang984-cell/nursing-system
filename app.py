@@ -621,7 +621,7 @@ if file_a and file_b:
                     ]
                 )
 
-                st.dataframe(
+            st.dataframe(
                     manpower_df,
                     use_container_width=True
                 )
