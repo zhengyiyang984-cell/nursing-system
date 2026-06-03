@@ -639,65 +639,17 @@ if file_a and file_b:
 
         names = list(staffs.keys())
 
-        # =====================
-        # 顯示自動抓取結果
-        # =====================
-
-permissions = {}
-history_shift = {}
-history_streak = {}
-
-for _, row in config_df.iterrows():
-
-    nurse = row["姓名"]
-
-    permissions[nurse] = str(
-        row["權限"]
-    ).upper()
-
-    history_shift[nurse] = str(
-        row["上月最後班"]
-    )
-
-    history_streak[nurse] = int(
-        row["已連上天數"]
-    )
-
-config_df = st.data_editor(
-    pd.DataFrame(config_rows),
-    use_container_width=True,
-    num_rows="fixed"
-)
-
-        permissions = {
-            n: staffs[n]["permission"]
-            for n in names
-        }
-
-        history_shift = {
-            n: staffs[n]["last_shift"]
-            for n in names
-        }
-
-        history_streak = {
-            n: staffs[n]["last_streak"]
-            for n in names
-        }
-
-        num_days = (
-            end_date - start_date
-        ).days + 1
-
-        st.subheader("⚙️ 人員權限與上月銜接設定")
         config_rows = []
 
         for nurse in names:
 
             config_rows.append({
+
                 "姓名": nurse,
                 "權限": staffs[nurse]["permission"],
-                "上月最後班": "off",
-                "已連上天數": 0
+                "上月最後班": staffs[nurse]["last_shift"],
+                "已連上天數": staffs[nurse]["last_streak"]
+
             })
 
         config_df = st.data_editor(
@@ -706,20 +658,9 @@ config_df = st.data_editor(
             num_rows="fixed"
         )
 
-        permissions = {
-            n: staffs[n]["permission"]
-            for n in names
-        }
-
-        history_shift = {
-            n: staffs[n]["last_shift"]
-            for n in names
-        }
-
-        history_streak = {
-            n: staffs[n]["last_streak"]
-            for n in names
-        }
+        permissions = {}
+        history_shift = {}
+        history_streak = {}
 
         for _, row in config_df.iterrows():
 
@@ -736,37 +677,15 @@ config_df = st.data_editor(
             history_streak[nurse] = int(
                 row["已連上天數"]
             )
-        permissions = {
-            n: staffs[n]["permission"]
-            for n in names
-        }
 
         num_days = (
             end_date - start_date
         ).days + 1
 
-        date_headers = []
+        # 後面繼續你的 date_headers...
+except Exception as e:
+    st.error(f"系統錯誤：{e}")
 
-        for i in range(num_days):
-
-            current_day = (
-                start_date
-                + datetime.timedelta(days=i)
-            )
-
-            weekday = WEEKDAYS_CHINESE[
-                current_day.weekday()
-            ]
-
-            date_headers.append(
-                f"{current_day.month}/{current_day.day}({weekday})"
-            )
-
-        requests = load_request_table(
-            file_b,
-            names,
-            num_days
-        )
 
         if st.button(
             "🚀 啟動排班",
