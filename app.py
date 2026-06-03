@@ -703,7 +703,7 @@ if file_a and file_b:
             num_rows="fixed"
         )
 
-            permissions = {
+        permissions = {
                 n: staffs[n]["permission"]
                 for n in names
             }
