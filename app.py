@@ -79,10 +79,7 @@ def can_work_shift(permission, shift):
 # 讀取基本班表
 # =====================================
 
-def load_history_from_base_schedule(
-    upload_file,
-    staffs
-):
+def load_base_schedule(upload_file):
 
     df = pd.read_excel(
         upload_file,
