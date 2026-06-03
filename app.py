@@ -158,11 +158,11 @@ def parse_permission(text):
         shift
 ):
 
-    if shift in [
-        "R",
-        "off",
-        "M"
-    ]:
+        if shift in [
+            "R",
+            "off",
+            "M"
+        ]:
         return True
 
     return shift in permission
