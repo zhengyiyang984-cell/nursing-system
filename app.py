@@ -704,19 +704,19 @@ if file_a and file_b:
         )
 
         permissions = {
-                n: staffs[n]["permission"]
-                for n in names
-            }
+            n: staffs[n]["permission"]
+            for n in names
+        }
 
-            history_shift = {
-                n: staffs[n]["last_shift"]
-                for n in names
-            }
+        history_shift = {
+            n: staffs[n]["last_shift"]
+            for n in names
+        }
 
-            history_streak = {
-                n: staffs[n]["last_streak"]
-                for n in names
-            }
+        history_streak = {
+            n: staffs[n]["last_streak"]
+            for n in names
+        }
 
         for _, row in config_df.iterrows():
 
