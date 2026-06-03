@@ -259,7 +259,9 @@ def generate_schedule(
     num_days,
     d_min,
     e_min,
-    n_min
+    n_min,
+    history_shift,
+    history_streak
 ):
 
     schedule = {
@@ -319,6 +321,12 @@ def generate_schedule(
 
         for nurse in names:
 
+            if day == 0:
+
+                if history_shift.get(nurse) == "N":
+
+                    continue
+        
             if nurse == "郭珍君":
                 continue
 
@@ -560,7 +568,10 @@ def generate_schedule(
 
     for nurse in names:
 
-        streak = 0
+        streak = history_streak.get(
+            nurse,
+            0
+        )
 
         for d in range(num_days):
 
@@ -592,9 +603,46 @@ if file_a and file_b:
     try:
 
         staffs = load_base_schedule(file_a)
-
+        
         names = list(staffs.keys())
 
+         st.subheader("⚙️ 人員權限與上月銜接設定")
+                config_rows = []
+
+        for nurse in names:
+
+            config_rows.append({
+                "姓名": nurse,
+                "權限": staffs[nurse]["permission"],
+                "上月最後班": "off",
+                "已連上天數": 0
+            })
+
+        config_df = st.data_editor(
+            pd.DataFrame(config_rows),
+            use_container_width=True,
+            num_rows="fixed"
+        )
+
+        permissions = {}
+        history_shift = {}
+        history_streak = {}
+
+        for _, row in config_df.iterrows():
+
+            nurse = row["姓名"]
+
+            permissions[nurse] = str(
+                row["權限"]
+            ).upper()
+
+            history_shift[nurse] = str(
+                row["上月最後班"]
+            )
+
+            history_streak[nurse] = int(
+                row["已連上天數"]
+            )
         permissions = {
             n: staffs[n]["permission"]
             for n in names
@@ -640,7 +688,9 @@ if file_a and file_b:
                 num_days,
                 d_min,
                 e_min,
-                n_min
+                n_min,
+                history_shift,
+                history_streak
             )
 
             st.success("排班完成")
