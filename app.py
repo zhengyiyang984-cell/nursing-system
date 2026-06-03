@@ -714,17 +714,17 @@ if file_a and file_b:
                     holiday_df,
                     use_container_width=True
                 )
-                                        with tabs[3]:
+                with tabs[3]:
 
-                night_rows = []
+                    night_rows = []
 
-                for nurse in names:
+                    for nurse in names:
 
-                    e_count = sum(
-                        1
-                        for x in result[nurse]
-                        if x == "E"
-                    )
+                        e_count = sum(
+                            1
+                            for x in result[nurse]
+                            if x == "E"
+                        )
 
                     n_count = sum(
                         1
