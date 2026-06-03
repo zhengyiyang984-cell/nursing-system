@@ -1,17 +1,24 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import datetime
 import random
 import re
 from io import BytesIO
+
+# =====================================
+# 基本設定
+# =====================================
 
 st.set_page_config(
     page_title="2F護理排班系統",
     layout="wide"
 )
 
-WEEKDAYS_CHINESE = ["一","二","三","四","五","六","日"]
+st.title("🏥 2F護理排班系統")
+
+WEEKDAYS_CHINESE = [
+    "一", "二", "三", "四", "五", "六", "日"
+]
 
 CORE_STAFF_NAMES = [
     "郭珍君",
@@ -28,9 +35,13 @@ CORE_STAFF_NAMES = [
     "林欣儀",
     "林怡薇"
 ]
+# =====================================
+# 權限解析
+# =====================================
+
 def parse_permission(text):
 
-    text = str(text).upper()
+    text = str(text).upper().strip()
 
     if "DEN" in text:
         return "DEN"
@@ -53,77 +64,100 @@ def parse_permission(text):
     if text == "N":
         return "N"
 
-    return "DEN"
-    def load_base_schedule(upload_file):
+    return None
+    # =====================================
+# 權限檢查
+# =====================================
 
-        df = pd.read_excel(
-        upload_file,
-        header=None
-        )
+def can_work_shift(permission, shift):
 
-        staffs = {}
+    if shift in ["R", "off", "M"]:
+        return True
 
-        for r in range(len(df)):
+    return shift in permission
+    # =====================================
+# 讀取基本班表
+# =====================================
 
-            row = [str(x) for x in df.iloc[r].values]
-
-            for name in CORE_STAFF_NAMES:
-
-                if name in "".join(row):
-
-                    perm = "DEN"
-
-                    for c in row:
-
-                        p = parse_permission(c)
-
-                        if p:
-                            perm = p
-
-                    staffs[name] = {
-                        "perm": perm,
-                        "part_time": name == "郭珍君"
-                    }
-
-    return staffs
-    def load_request_table(
-        file,
-        names,
-        num_days
-):
-
-        result = {
-            n: [""] * num_days
-            for n in names
-        }
-
-        xl = pd.ExcelFile(file)
-
-        sheet = xl.sheet_names[0]
+def load_base_schedule(upload_file):
 
     df = pd.read_excel(
-        file,
-        sheet_name=sheet
+        upload_file,
+        header=None
     )
 
-    for idx,row in df.iterrows():
+    staffs = {}
+
+    for r in range(len(df)):
+
+        row = [
+            str(x)
+            for x in df.iloc[r].values
+        ]
+
+        row_text = "".join(row)
+
+        for name in CORE_STAFF_NAMES:
+
+            if name in row_text:
+
+                permission = "DEN"
+
+                for cell in row:
+
+                    p = parse_permission(cell)
+
+                    if p:
+                        permission = p
+
+                staffs[name] = {
+                    "permission": permission,
+                    "part_time": name == "郭珍君"
+                }
+
+    return staffs
+    # =====================================
+# 讀取預排休表
+# =====================================
+
+def load_request_table(
+    upload_file,
+    names,
+    num_days
+):
+
+    result = {
+        n: [""] * num_days
+        for n in names
+    }
+
+    xl = pd.ExcelFile(upload_file)
+
+    sheet_name = xl.sheet_names[0]
+
+    df = pd.read_excel(
+        upload_file,
+        sheet_name=sheet_name
+    )
+
+    for _, row in df.iterrows():
 
         person = str(row.iloc[1]).strip()
 
-        matched = None
+        target = None
 
         for n in names:
 
             if n in person:
-                matched = n
+                target = n
                 break
 
-        if not matched:
+        if not target:
             continue
 
-        for day in range(num_days):
+        for d in range(num_days):
 
-            col = day + 2
+            col = d + 2
 
             if col >= len(df.columns):
                 continue
@@ -138,77 +172,72 @@ def parse_permission(text):
             value = value.upper()
 
             if value == "R":
-                result[matched][day] = "R"
+                result[target][d] = "R"
 
             elif value == "D":
-                result[matched][day] = "D"
+                result[target][d] = "D"
 
             elif value == "E":
-                result[matched][day] = "E"
+                result[target][d] = "E"
 
             elif value == "N":
-                result[matched][day] = "N"
+                result[target][d] = "N"
 
             elif "開會" in value:
-                result[matched][day] = "M"
+                result[target][d] = "M"
 
     return result
-    def can_work_shift(
-        permission,
-        shift
-):
+    # =====================================
+# 側邊設定
+# =====================================
 
-        if shift in [
-            "R",
-            "off",
-            "M"
-        ]:
-            return True
+with st.sidebar:
 
-    return shift in permission
-    with st.sidebar:
-
-        st.header("排班設定")
+    st.header("排班設定")
 
     start_date = st.date_input(
         "開始日期",
-        datetime.date(2026,1,1)
+        datetime.date.today().replace(day=1)
     )
 
     end_date = st.date_input(
         "結束日期",
-        datetime.date(2026,1,31)
+        datetime.date.today()
     )
 
+    st.markdown("---")
+
     d_min = st.number_input(
-        "白班最低",
+        "白班最低人數",
         value=4
     )
 
     d_max = st.number_input(
-        "白班最高",
+        "白班最高人數",
         value=5
     )
 
     e_min = st.number_input(
-        "小夜最低",
+        "小夜最低人數",
         value=3
     )
 
     e_max = st.number_input(
-        "小夜最高",
+        "小夜最高人數",
         value=3
     )
 
     n_min = st.number_input(
-        "大夜最低",
+        "大夜最低人數",
         value=2
     )
 
     n_max = st.number_input(
-        "大夜最高",
+        "大夜最高人數",
         value=2
     )
+
+    st.markdown("---")
 
     file_a = st.file_uploader(
         "基本班表",
@@ -219,7 +248,11 @@ def parse_permission(text):
         "預排休表",
         type=["xlsx"]
     )
-    def generate_schedule(
+    # =====================================
+# 排班主引擎
+# =====================================
+
+def generate_schedule(
     names,
     permissions,
     requests,
@@ -229,47 +262,45 @@ def parse_permission(text):
     n_min
 ):
 
-        schedule = {
-            n:[""] * num_days
-            for n in names
-        }
+    schedule = {
+        n: [""] * num_days
+        for n in names
+    }
 
     night_count = {
-        n:0
+        n: 0
         for n in names
     }
 
     work_count = {
-        n:0
+        n: 0
         for n in names
     }
 
-    consecutive = {
-        n:0
-        for n in names
-    }
-
-    # ----------------------
+    # -----------------------------
     # STEP1
     # 複製預排班
-    # ----------------------
+    # -----------------------------
 
-    for n in names:
+    for nurse in names:
 
         for d in range(num_days):
 
-            if requests[n][d] != "":
+            if requests[nurse][d] != "":
 
-                schedule[n][d] = requests[n][d]
+                schedule[nurse][d] = requests[nurse][d]
 
-                if requests[n][d] in ["D","E","N"]:
+                if requests[nurse][d] in [
+                    "D",
+                    "E",
+                    "N"
+                ]:
+                    work_count[nurse] += 1
 
-                    work_count[n] += 1
-
-    # ----------------------
+    # -----------------------------
     # STEP2
-    # N班優先分配
-    # ----------------------
+    # 大夜班
+    # -----------------------------
 
     for day in range(num_days):
 
@@ -286,21 +317,21 @@ def parse_permission(text):
 
         candidates = []
 
-        for n in names:
+        for nurse in names:
 
-            if n == "郭珍君":
+            if nurse == "郭珍君":
                 continue
 
-            if schedule[n][day] != "":
+            if schedule[nurse][day] != "":
                 continue
 
             if not can_work_shift(
-                permissions[n],
+                permissions[nurse],
                 "N"
             ):
                 continue
 
-            candidates.append(n)
+            candidates.append(nurse)
 
         candidates.sort(
             key=lambda x: night_count[x]
@@ -313,19 +344,22 @@ def parse_permission(text):
             night_count[nurse] += 1
             work_count[nurse] += 1
 
+            # N後固定休兩天
+
             if day + 1 < num_days:
 
-                if schedule[nurse][day+1] == "":
-                    schedule[nurse][day+1] = "off"
+                if schedule[nurse][day + 1] == "":
+                    schedule[nurse][day + 1] = "off"
 
             if day + 2 < num_days:
 
-                if schedule[nurse][day+2] == "":
-                    schedule[nurse][day+2] = "off"
-                        # ----------------------
+                if schedule[nurse][day + 2] == "":
+                    schedule[nurse][day + 2] = "off"
+
+    # -----------------------------
     # STEP3
     # 小夜
-    # ----------------------
+    # -----------------------------
 
     for day in range(num_days):
 
@@ -342,18 +376,18 @@ def parse_permission(text):
 
         candidates = []
 
-        for n in names:
+        for nurse in names:
 
-            if schedule[n][day] != "":
+            if schedule[nurse][day] != "":
                 continue
 
             if not can_work_shift(
-                permissions[n],
+                permissions[nurse],
                 "E"
             ):
                 continue
 
-            candidates.append(n)
+            candidates.append(nurse)
 
         candidates.sort(
             key=lambda x: night_count[x]
@@ -365,10 +399,11 @@ def parse_permission(text):
 
             night_count[nurse] += 1
             work_count[nurse] += 1
-                # ----------------------
+
+    # -----------------------------
     # STEP4
     # 白班
-    # ----------------------
+    # -----------------------------
 
     for day in range(num_days):
 
@@ -385,18 +420,18 @@ def parse_permission(text):
 
         candidates = []
 
-        for n in names:
+        for nurse in names:
 
-            if schedule[n][day] != "":
+            if schedule[nurse][day] != "":
                 continue
 
             if not can_work_shift(
-                permissions[n],
+                permissions[nurse],
                 "D"
             ):
                 continue
 
-            candidates.append(n)
+            candidates.append(nurse)
 
         random.shuffle(candidates)
 
@@ -405,74 +440,93 @@ def parse_permission(text):
             schedule[nurse][day] = "D"
 
             work_count[nurse] += 1
-                # ----------------------
-    # STEP5
-    # 補休
-    # ----------------------
 
-    for n in names:
+    # -----------------------------
+    # STEP5
+    # 剩餘補off
+    # -----------------------------
+
+    for nurse in names:
 
         for d in range(num_days):
 
-            if schedule[n][d] == "":
+            if schedule[nurse][d] == "":
 
-                schedule[n][d] = "off"
-                    # ----------------------
+                schedule[nurse][d] = "off"
+
+    # -----------------------------
     # STEP6
     # 郭珍君
-    # ----------------------
+    # 固定10天
+    # 只能白班
+    # -----------------------------
 
     if "郭珍君" in names:
+
+        nurse = "郭珍君"
 
         work_days = []
 
         for d in range(num_days):
 
-            if schedule["郭珍君"][d] == "D":
+            if schedule[nurse][d] == "D":
 
                 work_days.append(d)
 
         if len(work_days) > 10:
 
-            remove_num = len(work_days) - 10
+            extra = len(work_days) - 10
 
-            for idx in work_days[-remove_num:]:
+            for idx in work_days[-extra:]:
 
-                schedule["郭珍君"][idx] = "off"
-                    # ----------------------
+                schedule[nurse][idx] = "off"
+
+        for d in range(num_days):
+
+            if schedule[nurse][d] == "E":
+                schedule[nurse][d] = "off"
+
+            if schedule[nurse][d] == "N":
+                schedule[nurse][d] = "off"
+
+    # -----------------------------
     # STEP7
-    # 八天休
-    # ----------------------
+    # 四週至少8天休
+    # -----------------------------
 
-    for n in names:
+    for nurse in names:
 
-        holidays = sum(
+        holiday_count = sum(
             1
-            for x in schedule[n]
-            if x in ["off","R"]
+            for x in schedule[nurse]
+            if x in [
+                "off",
+                "R"
+            ]
         )
 
-        if holidays >= 8:
+        if holiday_count >= 8:
             continue
 
-        need = 8 - holidays
+        need = 8 - holiday_count
 
         for d in range(num_days):
 
             if need <= 0:
                 break
 
-            if schedule[n][d] == "D":
+            if schedule[nurse][d] == "D":
 
-                schedule[n][d] = "off"
+                schedule[nurse][d] = "off"
 
                 need -= 1
-                    # ----------------------
-    # STEP8
-    # 每週休一天
-    # ----------------------
 
-    for n in names:
+    # -----------------------------
+    # STEP8
+    # 每週至少一天休
+    # -----------------------------
+
+    for nurse in names:
 
         for start in range(
             0,
@@ -481,21 +535,57 @@ def parse_permission(text):
         ):
 
             end = min(
-                start+7,
+                start + 7,
                 num_days
             )
 
-            week = schedule[n][start:end]
+            week = schedule[nurse][start:end]
 
             has_rest = any(
-                x in ["off","R"]
+                x in [
+                    "off",
+                    "R"
+                ]
                 for x in week
             )
 
             if not has_rest:
 
-                schedule[n][end-1] = "off"
-                st.title("🏥 2F護理排班系統")
+                schedule[nurse][end - 1] = "off"
+
+    # -----------------------------
+    # STEP9
+    # 連續上班最多5天
+    # -----------------------------
+
+    for nurse in names:
+
+        streak = 0
+
+        for d in range(num_days):
+
+            if schedule[nurse][d] in [
+                "D",
+                "E",
+                "N"
+            ]:
+
+                streak += 1
+
+            else:
+
+                streak = 0
+
+            if streak > 5:
+
+                schedule[nurse][d] = "off"
+
+                streak = 0
+
+    return schedule
+    # =====================================
+# 主程式
+# =====================================
 
 if file_a and file_b:
 
@@ -506,7 +596,7 @@ if file_a and file_b:
         names = list(staffs.keys())
 
         permissions = {
-            n: staffs[n]["perm"]
+            n: staffs[n]["permission"]
             for n in names
         }
 
@@ -518,10 +608,17 @@ if file_a and file_b:
 
         for i in range(num_days):
 
-            d = start_date + datetime.timedelta(days=i)
+            current_day = (
+                start_date
+                + datetime.timedelta(days=i)
+            )
+
+            weekday = WEEKDAYS_CHINESE[
+                current_day.weekday()
+            ]
 
             date_headers.append(
-                f"{d.month}/{d.day}"
+                f"{current_day.month}/{current_day.day}({weekday})"
             )
 
         requests = load_request_table(
@@ -532,7 +629,8 @@ if file_a and file_b:
 
         if st.button(
             "🚀 啟動排班",
-            type="primary"
+            type="primary",
+            use_container_width=True
         ):
 
             result = generate_schedule(
@@ -554,87 +652,48 @@ if file_a and file_b:
                 "夜班統計",
                 "規則檢查"
             ])
+
+            # =====================
+            # TAB1 班表
+            # =====================
+
             with tabs[0]:
 
-                df = pd.DataFrame(
+                schedule_df = pd.DataFrame(
                     result
                 ).T
 
-                df.columns = date_headers
+                schedule_df.columns = date_headers
 
-                df.insert(
+                schedule_df.insert(
                     0,
                     "權限",
                     [
                         permissions[n]
-                        for n in df.index
+                        for n in schedule_df.index
                     ]
                 )
 
                 st.dataframe(
-                    df,
-                    use_container_width=True
+                    schedule_df,
+                    use_container_width=True,
+                    height=600
                 )
+
+            # =====================
+            # TAB2 每日人力
+            # =====================
+
             with tabs[1]:
 
-                    manpower_rows = []
+                manpower_rows = []
 
-                    for d in range(num_days):
+                for d in range(num_days):
 
-                        d_count = 0
-                        e_count = 0
-                        n_count = 0
-                        m_count = 0
-
-                        for nurse in names:
-
-                            shift = result[nurse][d]
-
-                        if shift == "D":
-                            d_count += 1
-
-                        elif shift == "E":
-                            e_count += 1
-
-                        elif shift == "N":
-                            n_count += 1
-
-                        elif shift == "M":
-                            m_count += 1
-
-                    manpower_rows.append([
-                        date_headers[d],
-                        d_count,
-                        e_count,
-                        n_count,
-                        m_count
-                    ])
-
-            manpower_df = pd.DataFrame(
-                    manpower_rows,
-                    columns=[
-                        "日期",
-                        "D",
-                        "E",
-                        "N",
-                        "M"
-                    ]
-                )
-
-            st.dataframe(
-                    manpower_df,
-                    use_container_width=True
-                )
-            with tabs[2]:
-
-                    manpower_rows = []
-
-                    for d in range(num_days):
-
-                        d_count = 0
-                        e_count = 0
-                        n_count = 0
-                        m_count = 0
+                    d_count = 0
+                    e_count = 0
+                    n_count = 0
+                    m_count = 0
 
                     for nurse in names:
 
@@ -664,10 +723,10 @@ if file_a and file_b:
                     manpower_rows,
                     columns=[
                         "日期",
-                        "D",
-                        "E",
-                        "N",
-                        "M"
+                        "白班(D)",
+                        "小夜(E)",
+                        "大夜(N)",
+                        "開會(M)"
                     ]
                 )
 
@@ -675,37 +734,42 @@ if file_a and file_b:
                     manpower_df,
                     use_container_width=True
                 )
-            with tabs[3]:
 
-                    holiday_rows = []
+            # =====================
+            # TAB3 休假統計
+            # =====================
 
-                    for nurse in names:
+            with tabs[2]:
 
-                        r_count = sum(
-                            1
-                            for x in result[nurse]
-                            if x == "R"
-                        )
+                holiday_rows = []
 
-                        off_count = sum(
-                            1
-                            for x in result[nurse]
-                            if x == "off"
-                        )
+                for nurse in names:
 
-                        holiday_rows.append([
-                            nurse,
-                            r_count,
-                            off_count,
-                            r_count + off_count
-                        ])
+                    r_count = sum(
+                        1
+                        for x in result[nurse]
+                        if x == "R"
+                    )
+
+                    off_count = sum(
+                        1
+                        for x in result[nurse]
+                        if x == "off"
+                    )
+
+                    holiday_rows.append([
+                        nurse,
+                        r_count,
+                        off_count,
+                        r_count + off_count
+                    ])
 
                 holiday_df = pd.DataFrame(
                     holiday_rows,
                     columns=[
                         "姓名",
-                        "R",
-                        "off",
+                        "預排休(R)",
+                        "OFF",
                         "總休假"
                     ]
                 )
@@ -714,37 +778,42 @@ if file_a and file_b:
                     holiday_df,
                     use_container_width=True
                 )
-            with tabs[4]:
 
-                    night_rows = []
+            # =====================
+            # TAB4 夜班統計
+            # =====================
 
-                    for nurse in names:
+            with tabs[3]:
 
-                        e_count = sum(
-                            1
-                            for x in result[nurse]
-                            if x == "E"
-                        )
+                night_rows = []
 
-                        n_count = sum(
-                            1
-                            for x in result[nurse]
-                            if x == "N"
-                        )
+                for nurse in names:
 
-                        night_rows.append([
-                            nurse,
-                            e_count,
-                            n_count,
-                            e_count + n_count
-                        ])
+                    e_count = sum(
+                        1
+                        for x in result[nurse]
+                        if x == "E"
+                    )
+
+                    n_count = sum(
+                        1
+                        for x in result[nurse]
+                        if x == "N"
+                    )
+
+                    night_rows.append([
+                        nurse,
+                        e_count,
+                        n_count,
+                        e_count + n_count
+                    ])
 
                 night_df = pd.DataFrame(
                     night_rows,
                     columns=[
                         "姓名",
-                        "E",
-                        "N",
+                        "E班",
+                        "N班",
                         "夜班總數"
                     ]
                 )
@@ -753,26 +822,67 @@ if file_a and file_b:
                     night_df,
                     use_container_width=True
                 )
-            with tabs[5]:
+                            # =====================
+            # TAB5 規則檢查
+            # =====================
 
-                    issues = []
+            with tabs[4]:
 
-                    for nurse in names:
+                issues = []
 
-                        total_rest = sum(
-                            1
-                            for x in result[nurse]
-                            if x in ["off","R"]
-                        )
+                for nurse in names:
+
+                    # -----------------
+                    # 休假天數
+                    # -----------------
+
+                    total_rest = sum(
+                        1
+                        for x in result[nurse]
+                        if x in ["off", "R"]
+                    )
 
                     if total_rest < 8:
 
                         issues.append([
                             nurse,
-                            "休假不足8天"
+                            f"休假不足8天 ({total_rest}天)"
                         ])
 
-                    consecutive = 0
+                    # -----------------
+                    # 每週至少一天休
+                    # -----------------
+
+                    for start in range(
+                        0,
+                        num_days,
+                        7
+                    ):
+
+                        end = min(
+                            start + 7,
+                            num_days
+                        )
+
+                        week = result[nurse][start:end]
+
+                        has_rest = any(
+                            x in ["off", "R"]
+                            for x in week
+                        )
+
+                        if not has_rest:
+
+                            issues.append([
+                                nurse,
+                                f"第{start//7+1}週無休假"
+                            ])
+
+                    # -----------------
+                    # 連續上班
+                    # -----------------
+
+                    streak = 0
 
                     for shift in result[nurse]:
 
@@ -782,13 +892,13 @@ if file_a and file_b:
                             "N"
                         ]:
 
-                            consecutive += 1
+                            streak += 1
 
                         else:
 
-                            consecutive = 0
+                            streak = 0
 
-                        if consecutive > 5:
+                        if streak > 5:
 
                             issues.append([
                                 nurse,
@@ -797,10 +907,40 @@ if file_a and file_b:
 
                             break
 
+                    # -----------------
+                    # 郭珍君規則
+                    # -----------------
+
+                    if nurse == "郭珍君":
+
+                        d_count = sum(
+                            1
+                            for x in result[nurse]
+                            if x == "D"
+                        )
+
+                        if d_count > 10:
+
+                            issues.append([
+                                nurse,
+                                f"白班超過10天 ({d_count})"
+                            ])
+
+                        for shift in result[nurse]:
+
+                            if shift in ["E", "N"]:
+
+                                issues.append([
+                                    nurse,
+                                    "出現非白班"
+                                ])
+
+                                break
+
                 if len(issues) == 0:
 
                     st.success(
-                        "沒有發現規則違反"
+                        "🎉 沒有發現規則違反"
                     )
 
                 else:
@@ -817,8 +957,59 @@ if file_a and file_b:
                         issue_df,
                         use_container_width=True
                     )
-                    except Exception as e:
+
+            # =====================
+            # Excel下載
+            # =====================
+
+            output = BytesIO()
+
+            with pd.ExcelWriter(
+                output,
+                engine="openpyxl"
+            ) as writer:
+
+                schedule_df.to_excel(
+                    writer,
+                    sheet_name="班表"
+                )
+
+                manpower_df.to_excel(
+                    writer,
+                    sheet_name="每日人力",
+                    index=False
+                )
+
+                holiday_df.to_excel(
+                    writer,
+                    sheet_name="休假統計",
+                    index=False
+                )
+
+                night_df.to_excel(
+                    writer,
+                    sheet_name="夜班統計",
+                    index=False
+                )
+
+                if len(issues) > 0:
+
+                    issue_df.to_excel(
+                        writer,
+                        sheet_name="規則檢查",
+                        index=False
+                    )
+
+            st.download_button(
+                label="📥 下載排班Excel",
+                data=output.getvalue(),
+                file_name="2F護理排班結果.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+    except Exception as e:
 
         st.error(
-            f"系統錯誤：{e}"
+            f"系統錯誤：{str(e)}"
         )
