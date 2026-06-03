@@ -683,8 +683,8 @@ if file_a and file_b:
         ).days + 1
 
         # 後面繼續你的 date_headers...
-except Exception as e:
-    st.error(f"系統錯誤：{e}")
+    except Exception as e:
+        st.error(f"系統錯誤：{e}")
 
 
         if st.button(
