@@ -675,7 +675,7 @@ if file_a and file_b:
                     manpower_df,
                     use_container_width=True
                 )
-                                        with tabs[2]:
+                with tabs[2]:
 
                 holiday_rows = []
 
