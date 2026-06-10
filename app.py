@@ -10,110 +10,43 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (14人全名單護航版)",
+    page_title="2F護理排班系統 (預排表權限抓取版)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (14人全名單護航版)")
+st.title("🏥 2F護理排班系統 (預排表權限抓取版)")
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# 核心 14 人名單（以此為準，絕對不漏抓）
+# 核心 14 人名單
 CORE_STAFF_NAMES = [
     "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
     "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
     "汪家容", "林欣儀", "林怡微", "陳威宇"
 ]
 
-# 宣告半職同仁
+# 兼職人員名單
 PART_TIME_STAFFS = ["郭珍君"] 
 
+# 作為安全防線的預設大腦（如果預排表沒寫權限，就用這個當底牌）
+DEFAULT_PERMISSIONS = {
+    "郭珍君": "D", "劉榆琳": "N", "陳義樺": "N", "李雅慧": "DEN", 
+    "蔡靜如": "DEN", "陳慧屏": "DEN", "黃家靜": "DEN", "許雅雯": "DEN", 
+    "林欣蓓": "DEN", "陳萱芸": "DEN", "汪家容": "DEN", "林欣儀": "DEN", 
+    "林怡微": "DEN", "陳威宇": "DEN"
+}
+
 # =====================================
-# 修改：全名單智慧載入器
+# 修正：預排休表「權限 + 假別」智慧雙挖取器
 # =====================================
-def load_base_schedule_safe(upload_file):
+def load_request_and_permissions(upload_file, names, num_days):
     """
-    不管 Excel 長怎樣，都強制以 CORE_STAFF_NAMES 的 14 人建立初始狀態，
-    並嘗試去 Excel 裡面精準配對權限。
+    同時精準抓取預排表中的：(1) 權限代號 (2) 每日預排休假/開會狀態
     """
-    df = pd.read_excel(upload_file, header=None)
+    # 初始化：假別與權限暫存器
+    requests_dict = {n: [""] * num_days for n in names}
+    permissions_dict = {n: DEFAULT_PERMISSIONS.get(n, "DEN") for n in names}
     
-    # 建立一個全文字的暫存區方便尋找
-    excel_rows_text = []
-    excel_rows_raw = []
-    for r in range(len(df)):
-        row_vals = [str(x).strip() for x in df.iloc[r].values]
-        excel_rows_raw.append(row_vals)
-        excel_rows_text.append("".join(row_vals))
-
-    staffs = {}
-    
-    # 強制巡迴這 14 個人，保證每個人都有資料
-    for nurse in CORE_STAFF_NAMES:
-        # 預設狀態
-        permission = "D" if nurse in PART_TIME_STAFFS else "DEN"
-        
-        # 試著在 Excel 的每一列找看看有沒有這個人的名字
-        for r_idx, row_text in enumerate(excel_rows_text):
-            if nurse in row_text:
-                # 找到了，嘗試抓取她右邊的權限代號
-                for cell in excel_rows_raw[r_idx]:
-                    cell_upper = str(cell).upper().strip()
-                    if cell_upper in ["D", "E", "N", "DE", "DN", "EN", "DEN"]:
-                        if len(cell_upper) > 1 or cell_upper == "N": 
-                            permission = cell_upper
-                break # 找到這個人的權限就跳出迴圈
-                
-        # 寫入名單，就算 Excel 裡沒這個人，也依然會建立預設格子
-        staffs[nurse] = {
-            "permission": permission,
-            "last_shift": "off",
-            "last_streak": 0,
-            "part_time": (nurse in PART_TIME_STAFFS)
-        }
-        
-    return staffs
-
-def can_work_shift(permission, shift):
-    if shift in ["R", "off", "M"]:
-        return True
-    return shift in permission
-
-def load_history_from_base_schedule(upload_file, staffs):
-    df = pd.read_excel(upload_file, header=None)
-    for r in range(len(df)):
-        row = [str(x).strip() for x in df.iloc[r].values]
-        row_text = "".join(row)
-        
-        target = None
-        for nurse in staffs.keys():
-            if nurse in row_text:
-                target = nurse
-                break
-        if not target:
-            continue
-            
-        shifts = []
-        for cell in row:
-            cell = str(cell).upper()
-            if cell in ["D", "E", "N", "OFF", "R", "M"]:
-                shifts.append(cell)
-        if len(shifts) == 0:
-            continue
-            
-        staffs[target]["last_shift"] = shifts[-1]
-        
-        streak = 0
-        for s in reversed(shifts):
-            if s in ["D", "E", "N"]:
-                streak += 1
-            else:
-                break
-        staffs[target]["last_streak"] = streak
-    return staffs
-
-def load_request_table(upload_file, names, num_days):
-    result = {n: [""] * num_days for n in names}
     xl = pd.ExcelFile(upload_file)
     sheet_name = xl.sheet_names[0]
     df = pd.read_excel(upload_file, sheet_name=sheet_name, header=None)
@@ -121,6 +54,7 @@ def load_request_table(upload_file, names, num_days):
     header_row_idx = 0
     name_col_idx = 1
     
+    # 尋找表頭
     for idx, row in df.iterrows():
         row_str = [str(x) for x in row.values]
         if any("姓名" in s or "人員" in s or "稱" in s for s in row_str):
@@ -144,7 +78,30 @@ def load_request_table(upload_file, names, num_days):
         if not target_nurse:
             continue
             
+        # --- 【核心優化】挖取同仁名字右側、日期左側的「權限格子」 ---
+        # 假設姓名欄到第一天(1號)日期中間可能夾有 1~2 格欄位（例如職稱、職等、權限）
+        for c_idx in range(name_col_idx + 1, name_col_idx + 4):
+            if c_idx >= len(df.columns):
+                break
+            # 如果發現這格的抬頭寫著 1 或是 日期，代表已經進入排班區，停止抓權限
+            col_name = str(df.columns[c_idx])
+            if "1" in col_name or "/" in col_name or "月" in col_name:
+                break
+                
+            cell_val = str(row.iloc[c_idx]).upper().strip()
+            if cell_val in ["D", "E", "N", "DE", "DN", "EN", "DEN"]:
+                # 精準抓到 Excel 裡指定的權限，覆蓋掉預設大腦！
+                permissions_dict[target_nurse] = cell_val
+
+        # --- 挖取 1 號到當月最後一天的預排假別 ---
         start_data_col = name_col_idx + 1
+        # 先動態找出「1」號或第一個日期具體在哪一欄（防止權限欄位寬度改變）
+        for c_idx in range(name_col_idx + 1, len(df.columns)):
+            col_name = str(df.columns[c_idx])
+            if "1" in col_name or "/" in col_name:
+                start_data_col = c_idx
+                break
+                
         for d in range(num_days):
             current_col_idx = start_data_col + d
             if current_col_idx >= len(df.columns):
@@ -154,30 +111,57 @@ def load_request_table(upload_file, names, num_days):
                 continue
             cell_value_upper = cell_value.upper()
             if cell_value_upper in ["R", "D", "E", "N"]:
-                result[target_nurse][d] = cell_value_upper
+                requests_dict[target_nurse][d] = cell_value_upper
             elif "開會" in cell_value or cell_value_upper == "M":
-                result[target_nurse][d] = "M"
+                requests_dict[target_nurse][d] = "M"
             elif "休" in cell_value:
-                result[target_nurse][d] = "R"
+                requests_dict[target_nurse][d] = "R"
                 
-    return result
+    return requests_dict, permissions_dict
 
 # =====================================
-# 側邊設定
+# 歷史狀態載入（僅抓上月最後班與連上天數）
 # =====================================
-
-with st.sidebar:
-    st.header("📅 日期與檔案設定")
-    start_date = st.date_input("開始日期", datetime.date.today().replace(day=1))
-    end_date = st.date_input("結束日期", datetime.date.today())
-    st.markdown("---")
-    file_a = st.file_uploader("基本班表", type=["xlsx"])
-    file_b = st.file_uploader("預排休表", type=["xlsx"])
+def load_history_only(upload_file, names):
+    history_shift = {n: "off" for n in names}
+    history_streak = {n: 0 for n in names}
+    
+    df = pd.read_excel(upload_file, header=None)
+    for r in range(len(df)):
+        row = [str(x).strip() for x in df.iloc[r].values]
+        row_text = "".join(row)
+        
+        target = None
+        for nurse in names:
+            if nurse in row_text:
+                target = nurse
+                break
+        if not target:
+            continue
+            
+        shifts = []
+        for cell in row:
+            cell = str(cell).upper()
+            if cell in ["D", "E", "N", "OFF", "R", "M"]:
+                shifts.append(cell)
+        if len(shifts) == 0:
+            continue
+            
+        history_shift[target] = shifts[-1]
+        
+        streak = 0
+        for s in reversed(shifts):
+            if s in ["D", "E", "N"]:
+                streak += 1
+            else:
+                break
+        history_streak[target] = streak
+        
+    return history_shift, history_streak
 
 # =====================================
-# 智慧排班引擎
+# 智慧排班引擎（維持滿載調度限制）
 # =====================================
-
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
     night_count = {n: 0 for n in names}
@@ -294,7 +278,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             schedule[nurse][day] = "D"
             work_count[nurse] += 1
 
-    # STEP 5: 半職郭珍君 精密智慧補洞
+    # STEP 5: 半職郭珍君 智慧補洞
     for nurse in PART_TIME_STAFFS:
         if nurse in names:
             allocated_days = 0
@@ -374,12 +358,16 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
 
 if file_a and file_b:
     try:
-        # 【更新】改用安全防漏載入器
-        staffs = load_base_schedule_safe(file_a)
-        staffs = load_history_from_base_schedule(file_a, staffs)
-        names = list(staffs.keys())
-
         num_days = (end_date - start_date).days + 1
+        
+        # 1. 【核心更新】直接由預排休表(file_b)同時挖出預排假與每人的權限設定！
+        requests, extracted_permissions = load_request_and_permissions(file_b, CORE_STAFF_NAMES, num_days)
+        
+        # 2. 由基本班表(file_a)抓取上月的最後歷史紀錄
+        history_shift, history_streak = load_history_only(file_a, CORE_STAFF_NAMES)
+        
+        names = CORE_STAFF_NAMES
+
         date_headers = []
         manpower_setup_rows = []
 
@@ -403,13 +391,14 @@ if file_a and file_b:
         
         with col1:
             st.subheader("👥 1. 人員初始狀態確認")
+            st.caption("💡 權限欄位已優先從您上傳的【預排休表】中撈取。若沒寫則使用系統預設值。")
             config_rows = []
             for nurse in names:
                 config_rows.append({
                     "姓名": nurse,
-                    "權限": staffs[nurse]["permission"],
-                    "上月最後班": staffs[nurse]["last_shift"],
-                    "已連上天數": staffs[nurse]["last_streak"]
+                    "權限": extracted_permissions[nurse], # 帶入自動撈到的權限
+                    "上月最後班": history_shift[nurse],
+                    "已連上天數": history_streak[nurse]
                 })
             config_df = st.data_editor(pd.DataFrame(config_rows), use_container_width=True, num_rows="fixed")
 
@@ -425,26 +414,25 @@ if file_a and file_b:
                 "N_min": int(row["大夜最低(N)"])
             })
 
+        # 以網頁畫面上最後確認（編輯後）的數值為排班依據
         permissions = {}
-        history_shift = {}
-        history_streak = {}
+        history_shift_final = {}
+        history_streak_final = {}
         for _, row in config_df.iterrows():
             nurse = row["姓名"]
             permissions[nurse] = str(row["權限"]).upper()
-            history_shift[nurse] = str(row["上月最後班"])
-            history_streak[nurse] = int(row["已連上天數"])
-
-        requests = load_request_table(file_b, names, num_days)
+            history_shift_final[nurse] = str(row["上月最後班"])
+            history_streak_final[nurse] = int(row["已連上天數"])
 
         st.markdown("---")
         
         if st.button("🚀 依照自訂每日人力啟動自動排班", type="primary", use_container_width=True):
-            with st.spinner("單半職極限優化班表計算中..."):
+            with st.spinner("讀取預排表權限並極速計算中..."):
                 result = generate_schedule(
                     names, permissions, requests, num_days,
-                    manpower_req_list, history_shift, history_streak
+                    manpower_req_list, history_shift_final, history_streak_final
                 )
-            st.success("🎉 14人優化班表計算完成！")
+            st.success("🎉 14人智慧權限班表計算完成！")
 
             tabs = st.tabs(["📅 最終班表", "📊 每日實際人力", "🏖️ 休假統計", "🌙 夜班統計", "🔍 規則檢查"])
 
@@ -513,7 +501,7 @@ if file_a and file_b:
                             issues.append([nurse, "兼職人員排班錯誤：出現非白班(E/N班)"])
 
                 if len(issues) == 0:
-                    st.success("🎉 太棒了！14位護理同仁名單全數歸位，且所有排班皆完美符合規則！")
+                    st.success("🎉 太棒了！14位護理同仁權限與假別對齊成功，且所有排班皆完美符合規則！")
                 else:
                     issue_df = pd.DataFrame(issues, columns=["姓名", "異常說明"])
                     st.dataframe(issue_df, use_container_width=True)
@@ -525,9 +513,9 @@ if file_a and file_b:
                 holiday_df.to_excel(writer, sheet_name="休假統計", index=False)
                 night_df.to_excel(writer, sheet_name="夜班統計", index=False)
             st.download_button(
-                label="📥 下載 14人最終排班 Excel",
+                label="📥 下載 14人動態權限最終版 Excel",
                 data=output.getvalue(),
-                file_name=f"2F護理排班結果_14人防漏版_{start_date.strftime('%m%d')}.xlsx",
+                file_name=f"2F護理排班結果_動態權限版_{start_date.strftime('%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
@@ -535,4 +523,4 @@ if file_a and file_b:
     except Exception as e:
         st.error(f"系統執行時發生錯誤：{str(e)}")
 else:
-    st.info("💡 請上傳檔案，系統會以 14 人名單為您強制對齊並排班。")
+    st.info("💡 請同時上傳【基本班表】與【預排休表】，系統會自動從預排休表撈取最新的同仁權限配置。")
