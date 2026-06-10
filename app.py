@@ -194,36 +194,44 @@ with st.sidebar:
 
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     """
-    manpower_req: 傳入一個 List[Dict]，包含每天各自的 D_min, E_min, N_min
+    【人力滿載優先版排班引擎】
+    優化邏輯：優先填滿每天各班別的最低人數，剩下的空格才作為休假，最後依據勞基法多退少補。
     """
     schedule = {n: [""] * num_days for n in names}
-    night_count = {n: 0 for n in names}
-    work_count = {n: 0 for n in names}
+    night_count = {n: 0 for n in names} # 累計夜班
+    work_count = {n: 0 for n in names}  # 累計總工作天數
 
-    # STEP 1: 複製預排班
+    # ----------------------------------------------------
+    # STEP 1: 僅鎖定「絕對不能動的預排班」（如開會 M、已強烈要求的特定 D/E/N）
+    # ----------------------------------------------------
     for nurse in names:
         for d in range(num_days):
-            if requests[nurse][d] != "":
+            # 如果是開會 M，或者是強烈指定的特定班別，先鎖定，常規 R 班先不卡死
+            if requests[nurse][d] in ["M", "D", "E", "N"]:
                 schedule[nurse][d] = requests[nurse][d]
                 if requests[nurse][d] in ["D", "E", "N"]:
                     work_count[nurse] += 1
                     if requests[nurse][d] in ["E", "N"]:
                         night_count[nurse] += 1
 
-    # STEP 2: 動態大夜班 (N)
+    # ----------------------------------------------------
+    # STEP 2: 滿足每日「大夜班 (N)」最低人數（滿載優先）
+    # ----------------------------------------------------
     for day in range(num_days):
-        req_n_min = manpower_req[day]["N_min"]  # 讀取該日期特定的大夜最低人數
+        req_n_min = manpower_req[day]["N_min"]
         current_n = sum(1 for n in names if schedule[n][day] == "N")
         need_n = req_n_min - current_n
+        
         if need_n <= 0:
             continue
 
         candidates = []
         for nurse in names:
-            if nurse == "郭珍君":
+            if nurse == "郭珍君": # 兼職不排夜班
                 continue
-            if schedule[nurse][day] != "":
+            if schedule[nurse][day] != "": # 已被開會或指定班卡住
                 continue
+            # 檢查預排休：如果今天有排休，但單位大夜人不夠，且他能上 N 班，先列為備選（行有餘力才給休）
             if not can_work_shift(permissions[nurse], "N"):
                 continue
             if day == 0 and history_shift.get(nurse) == "N":
@@ -232,23 +240,28 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 continue
             candidates.append(nurse)
 
+        # 排序：優先讓預排休表「不是 R」的人先上；如果大家都一樣，看誰夜班少
         random.shuffle(candidates)
-        candidates.sort(key=lambda x: (night_count[x], work_count[x]))
+        candidates.sort(key=lambda x: (1 if requests[x][day] == "R" else 0, night_count[x], work_count[x]))
 
         for nurse in candidates[:need_n]:
             schedule[nurse][day] = "N"
             night_count[nurse] += 1
             work_count[nurse] += 1
+            # N下之後固定休假的保護機制（白班格子留白，稍後由系統補 off）
             if day + 1 < num_days and schedule[nurse][day + 1] == "":
-                schedule[nurse][day + 1] = "off"
+                schedule[nurse][day + 1] = "N_OFF" # 暫存標記：大夜下休
             if day + 2 < num_days and schedule[nurse][day + 2] == "":
-                schedule[nurse][day + 2] = "off"
+                schedule[nurse][day + 2] = "N_OFF"
 
-    # STEP 3: 動態小夜班 (E)
+    # ----------------------------------------------------
+    # STEP 3: 滿足每日「小夜班 (E)」最低人數（滿載優先）
+    # ----------------------------------------------------
     for day in range(num_days):
-        req_e_min = manpower_req[day]["E_min"]  # 讀取該日期特定的小夜最低人數
+        req_e_min = manpower_req[day]["E_min"]
         current_e = sum(1 for n in names if schedule[n][day] == "E")
         need_e = req_e_min - current_e
+        
         if need_e <= 0:
             continue
 
@@ -256,25 +269,29 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
         for nurse in names:
             if nurse == "郭珍君":
                 continue
-            if schedule[nurse][day] != "":
+            if schedule[nurse][day] != "": # 包含大夜下休 N_OFF 也不動
                 continue
             if not can_work_shift(permissions[nurse], "E"):
                 continue
             candidates.append(nurse)
 
+        # 排序：同樣讓今天沒劃休的人優先上班
         random.shuffle(candidates)
-        candidates.sort(key=lambda x: (night_count[x], work_count[x]))
+        candidates.sort(key=lambda x: (1 if requests[x][day] == "R" else 0, night_count[x], work_count[x]))
 
         for nurse in candidates[:need_e]:
             schedule[nurse][day] = "E"
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 4: 動態白班 (D)
+    # ----------------------------------------------------
+    # STEP 4: 滿足每日「白班 (D)」最低人數（滿載優先）
+    # ----------------------------------------------------
     for day in range(num_days):
-        req_d_min = manpower_req[day]["D_min"]  # 讀取該日期特定的白班最低人數
+        req_d_min = manpower_req[day]["D_min"]
         current_d = sum(1 for n in names if schedule[n][day] == "D")
         need_d = req_d_min - current_d
+        
         if need_d <= 0:
             continue
 
@@ -287,18 +304,28 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             candidates.append(nurse)
 
         random.shuffle(candidates)
-        candidates.sort(key=lambda x: work_count[x])
+        # 排序：沒劃休、且目前總班數上得少的人優先補白班
+        candidates.sort(key=lambda x: (1 if requests[x][day] == "R" else 0, work_count[x]))
 
         for nurse in candidates[:need_d]:
             schedule[nurse][day] = "D"
             work_count[nurse] += 1
 
-    # STEP 5至9：其餘勞基法常規限制維持（包含郭珍君10天白班規則）
+    # ----------------------------------------------------
+    # STEP 5: 核心調整！人力都滿載了，剩下的空格才正式排休假
+    # ----------------------------------------------------
     for nurse in names:
         for d in range(num_days):
-            if schedule[nurse][d] == "":
-                schedule[nurse][d] = "off"
+            if schedule[nurse][d] in ["", "N_OFF"]:
+                # 如果當初有預排 R 班，就還給他 R；否則就是單位的常規 off
+                if requests[nurse][d] == "R":
+                    schedule[nurse][d] = "R"
+                else:
+                    schedule[nurse][d] = "off"
 
+    # ----------------------------------------------------
+    # STEP 6: 兼職郭珍君特別規則（固定最多 10 天白班）
+    # ----------------------------------------------------
     if "郭珍君" in names:
         nurse = "郭珍君"
         work_days = [d for d in range(num_days) if schedule[nurse][d] == "D"]
@@ -308,20 +335,31 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 if requests[nurse][idx] != "M":
                     schedule[nurse][idx] = "off"
 
+    # ----------------------------------------------------
+    # STEP 7: 法定假天數多退少補（全職四週至少 8 天休，含 off 與 R）
+    # ----------------------------------------------------
     for nurse in names:
         if nurse == "郭珍君":
             continue
+        
         holiday_count = sum(1 for x in schedule[nurse] if x in ["off", "R"])
-        if holiday_count >= 8:
-            continue
-        need = 8 - holiday_count
-        for d in range(num_days):
-            if need <= 0:
-                break
-            if schedule[nurse][d] == "D" and requests[nurse][d] == "":
-                schedule[nurse][d] = "off"
-                need -= 1
+        
+        # 情況 A：如果這個人被塞了太多班，導致休假不足 8 天 -> 抽掉非預排白班變 off
+        if holiday_count < 8:
+            need = 8 - holiday_count
+            for d in range(num_days):
+                if need <= 0:
+                    break
+                if schedule[nurse][d] == "D" and requests[nurse][d] == "":
+                    schedule[nurse][d] = "off"
+                    need -= 1
+                    
+        # 情況 B（解決你的痛點）：如果這個人休假太多（例如大夜下休卡太多），導致上班天數過低
+        # 這裡不強行扣回，因為前面已經透過排序盡可能把她們拉去上班了。
 
+    # ----------------------------------------------------
+    # STEP 8: 每週至少一天休 與 連續上班最多 5 天防呆
+    # ----------------------------------------------------
     for nurse in names:
         for start in range(0, num_days, 7):
             end = min(start + 7, num_days)
