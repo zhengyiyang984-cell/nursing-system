@@ -10,11 +10,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (選單優化完全體)",
+    page_title="2F護理排班系統 (極致穩定版)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (選單優化完全體)")
+st.title("🏥 2F護理排班系統 (極致穩定版)")
 
 # 初始化 Streamlit 永久記憶體狀態
 if "run_success" not in st.session_state:
@@ -34,12 +34,20 @@ CORE_STAFF_NAMES = [
 # 兼職人員名單
 PART_TIME_STAFFS = ["郭珍君"] 
 
-# 備用安全底牌
+# 備用安全底牌：當月權限大腦
 DEFAULT_PERMISSIONS = {
     "郭珍君": "D", "劉榆琳": "N", "陳義樺": "N", "李雅慧": "DEN", 
     "蔡靜如": "DEN", "陳慧屏": "DEN", "黃家靜": "DEN", "許雅雯": "DEN", 
     "林欣蓓": "DEN", "陳萱芸": "DEN", "汪家容": "DEN", "林欣儀": "DEN", 
     "林怡微": "DEN", "陳威宇": "DEN"
+}
+
+# 備用安全底牌：上月最後班大腦（直接內建常規，防止 Excel 抓空）
+DEFAULT_LAST_SHIFTS = {
+    "郭珍君": "off", "劉榆琳": "N", "陳義樺": "N", "李雅慧": "D", 
+    "蔡靜如": "D", "陳慧屏": "D", "黃家靜": "D", "許雅雯": "D", 
+    "林欣蓓": "D", "陳萱芸": "D", "汪家容": "D", "林欣儀": "D", 
+    "林怡微": "D", "陳威宇": "D"
 }
 
 # =====================================
@@ -107,81 +115,6 @@ def load_request_and_permissions(upload_file, names, num_days):
     return requests_dict, permissions_dict
 
 # =====================================
-# 🎯【重大修復】基本班表歷史狀態精準對齊載入器
-# =====================================
-def load_history_only(upload_file, names):
-    """
-    精準定位基本班表中的姓名與日期排班格子，防範右側統計欄位的干擾。
-    """
-    history_shift = {n: "off" for n in names}
-    history_streak = {n: 0 for n in names}
-    
-    df = pd.read_excel(upload_file, header=None)
-    
-    header_row_idx = 0
-    name_col_idx = 1
-    
-    # 1. 尋找舊班表的表頭座標
-    for idx, row in df.iterrows():
-        row_str = [str(x) for x in row.values]
-        if any("姓名" in s or "人員" in s for s in row_str):
-            header_row_idx = idx
-            for col_idx, cell_value in enumerate(row_str):
-                if "姓名" in cell_value or "人員" in cell_value:
-                    name_col_idx = col_idx
-                    break
-            break
-
-    df.columns = df.iloc[header_row_idx]
-    df = df.iloc[header_row_idx + 1 :].reset_index(drop=True)
-    
-    for _, row in df.iterrows():
-        # 強制雙重去空格
-        raw_name = str(row.iloc[name_col_idx]).replace(" ", "").replace(" ", "").strip()
-        
-        target_nurse = None
-        for n in names:
-            if n in raw_name:
-                target_nurse = n
-                break
-        if not target_nurse:
-            continue
-            
-        # 2. 智慧撈取排班區間（從姓名右側第3欄開始，一直撈到遇到統計欄或空格為止）
-        start_data_col = name_col_idx + 3
-        shifts = []
-        
-        for c_idx in range(start_data_col, len(df.columns)):
-            col_name = str(df.columns[c_idx])
-            # 如果欄位名稱看起來像「合計」、「總計」、「夜班數」，代表排班區結束了
-            if "計" in col_name or "總" in col_name or "天" in col_name:
-                break
-                
-            cell_val = str(row.iloc[c_idx]).upper().strip()
-            if cell_val in ["D", "E", "N", "OFF", "R", "M", "NAN", ""]:
-                # 如果遇到完全無關的髒資料則忽略，只記錄常規班別
-                if cell_val in ["NAN", ""]:
-                    cell_val = "OFF"
-                shifts.append(cell_val)
-        
-        if len(shifts) == 0:
-            continue
-            
-        # 3. 抓取最後一天的班別
-        history_shift[target_nurse] = shifts[-1].lower() if shifts[-1] in ["OFF", "off"] else shifts[-1]
-        
-        # 4. 計算最後連續上班天數
-        streak = 0
-        for s in reversed(shifts):
-            if s in ["D", "E", "N"]:
-                streak += 1
-            else:
-                break
-        history_streak[target_nurse] = streak
-        
-    return history_shift, history_streak
-
-# =====================================
 # 智慧排班引擎
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
@@ -197,7 +130,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 if requests[nurse][d] in ["E", "N"]:
                     night_count[nurse] += 1
 
-    # STEP 2: 大夜班 (N) 分配 —— 滿載優先
+    # STEP 2: 大夜班 (N) 分配
     for day in range(num_days):
         req_n_min = manpower_req[day]["N_min"]
         current_n = sum(1 for n in names if schedule[n][day] == "N")
@@ -233,7 +166,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 3: 小夜班 (E) 分配 —— 滿載優先
+    # STEP 3: 小夜班 (E) 分配
     for day in range(num_days):
         req_e_min = manpower_req[day]["E_min"]
         current_e = sum(1 for n in names if schedule[n][day] == "E")
@@ -267,7 +200,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 4: 白班 (D) 分配 —— 雙重救火
+    # STEP 4: 白班 (D) 分配 (雙重強力救火)
     for day in range(num_days):
         req_d_min = manpower_req[day]["D_min"]
         current_d = sum(1 for n in names if schedule[n][day] == "D")
@@ -298,7 +231,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             schedule[nurse][day] = "D"
             work_count[nurse] += 1
 
-        # 第二輪強力救火
+        # 第二輪極限救火
         current_d = sum(1 for n in names if schedule[n][day] == "D")
         need_d = req_d_min - current_d
         if need_d > 0:
@@ -407,7 +340,7 @@ def can_work_shift(permission, shift):
     return shift in permission
 
 # =====================================
-# 側邊欄與主要畫面宣告
+# 側邊欄與主要畫面宣告 (只留預排休表 file_b 上傳)
 # =====================================
 
 with st.sidebar:
@@ -415,20 +348,19 @@ with st.sidebar:
     start_date = st.date_input("開始日期", datetime.date.today().replace(day=1))
     end_date = st.date_input("結束日期", datetime.date.today())
     st.markdown("---")
-    file_a = st.file_uploader("基本班表", type=["xlsx"])
-    file_b = st.file_uploader("預排休表", type=["xlsx"])
+    # 🎯【降維簡化防錯】直接移除 file_a 基本班表上傳，100% 避開髒資料解析崩。
+    file_b = st.file_uploader("上傳當月【預排休表】", type=["xlsx"])
 
 # =====================================
 # 主程式邏輯區
 # =====================================
 
-if file_a and file_b:
+if file_b:
     try:
         num_days = (end_date - start_date).days + 1
         
+        # 從 file_b 自動挖取預排假與權限
         requests, extracted_permissions = load_request_and_permissions(file_b, CORE_STAFF_NAMES, num_days)
-        # 🎯【核心修復】此處改呼叫全新升級具備「座標尋軌機制」的安全歷史讀取器
-        history_shift, history_streak = load_history_only(file_a, CORE_STAFF_NAMES)
         names = CORE_STAFF_NAMES
 
         date_headers = []
@@ -454,16 +386,18 @@ if file_a and file_b:
         
         with col1:
             st.subheader("👥 1. 人員初始狀態確認")
+            st.caption("💡 系統已自動載入預設班別與權限，你可以直接在下方選單快速微調！")
             config_rows = []
             for nurse in names:
                 config_rows.append({
                     "姓名": nurse,
                     "權限": extracted_permissions[nurse], 
-                    "上月最後班": history_shift[nurse],
-                    "已連上天數": history_streak[nurse]
+                    "上月最後班": DEFAULT_LAST_SHIFTS.get(nurse, "D"), # 🎯 直接套用底牌預設常規班別
+                    "已連上天數": 0
                 })
             base_config_df = pd.DataFrame(config_rows)
             
+            # 萬用相容下拉選單組件
             config_df = st.data_editor(
                 base_config_df, 
                 use_container_width=True, 
@@ -478,7 +412,7 @@ if file_a and file_b:
                     ),
                     "上月最後班": st.column_config.SelectboxColumn(
                         "上月最後班",
-                        help="跨月排班安全防呆依據",
+                        help="跨月排班安全防呆依據（請依上月底最後一天班別微調）",
                         options=["D", "E", "N", "off", "R", "M"],
                         required=True
                     ),
@@ -620,4 +554,4 @@ if file_a and file_b:
     except Exception as e:
         st.error(f"系統執行時發生錯誤：{str(e)}")
 else:
-    st.info("💡 請上傳【基本班表】與【預排休表】，系統會自動從 D 欄抓取每名同仁的當月排班權限。")
+    st.info("💡 請上傳當月【預排休表】以啟動自動排班系統。")
