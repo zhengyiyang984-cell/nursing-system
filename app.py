@@ -730,31 +730,33 @@ if file_a and file_b:
         num_days = (
             end_date - start_date
         ).days + 1
-if st.button(
-    "🚀 啟動排班",
-    type="primary",
-    use_container_width=True
-):
 
-    result = generate_schedule(
-        names,
-        permissions,
-        requests,
-        num_days,
-        d_min,
-        e_min,
-        n_min,
-        history_shift,
-        history_streak
-    )
+        # ← 注意這裡多縮排 8 格
+        if st.button(
+            "🚀 啟動排班",
+            type="primary",
+            use_container_width=True
+        ):
 
-    st.success("排班完成")
+            result = generate_schedule(
+                names,
+                permissions,
+                requests,
+                num_days,
+                d_min,
+                e_min,
+                n_min,
+                history_shift,
+                history_streak
+            )
 
-except Exception as e:
+            st.success("排班完成")
 
-    st.error(
-        f"系統錯誤：{e}"
-    )
+    except Exception as e:
+
+        st.error(
+            f"系統錯誤：{e}"
+        )
 
             result = generate_schedule(
                 names,
