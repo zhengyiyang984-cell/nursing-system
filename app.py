@@ -146,17 +146,15 @@ def load_history_only(upload_file, names):
     return history_shift, history_streak
 
 # =====================================
-# 智慧排班引擎 (安全邊界強化版)
+# 智慧排班引擎
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
-    # 嚴格初始化，保證長度與真實天數 100% 相同
     schedule = {n: [""] * num_days for n in names}
     night_count = {n: 0 for n in names}
     work_count = {n: 0 for n in names}
 
     for nurse in names:
         for d in range(num_days):
-            # 安全檢查：確保預排資料長度足夠，防止超出邊界
             if d < len(requests[nurse]) and requests[nurse][d] in ["M", "D", "E", "N"]:
                 schedule[nurse][d] = requests[nurse][d]
                 work_count[nurse] += 1
@@ -167,7 +165,8 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
     for day in range(num_days):
         req_n_min = manpower_req[day]["N_min"]
         current_n = sum(1 for n in names if schedule[n][day] == "N")
-        need_n = n_min = req_n_min - current_n
+        # 🎯【核心精準修正】修正此處多餘的 = n_min 賦值錯誤
+        need_n = req_n_min - current_n
         if need_n <= 0:
             continue
 
@@ -181,13 +180,11 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 continue
             if day == 0 and history_shift.get(nurse) == "N":
                 continue
-            # 安全防呆：確保前一天在範圍內
             if day > 0 and day - 1 < len(schedule[nurse]) and schedule[nurse][day - 1] == "N":
                 continue
             candidates.append(nurse)
 
         random.shuffle(candidates)
-        # 確保比對時 requests 索引安全
         candidates.sort(key=lambda x: (1 if (day < len(requests[x]) and requests[x][day] == "R") else 0, night_count[x], work_count[x]))
 
         for nurse in candidates[:need_n]:
@@ -211,7 +208,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 continue
             if not can_work_shift(permissions[nurse], "E"):
                 continue
-            # 安全防呆
             if day > 0 and day - 1 < len(schedule[nurse]) and schedule[nurse][day - 1] == "N":
                 continue
             candidates.append(nurse)
@@ -246,7 +242,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 continue
             if not can_work_shift(permissions[nurse], "D"):
                 continue
-            # 安全防呆大夜保護
             if day > 0 and day - 1 < len(schedule[nurse]) and schedule[nurse][day - 1] == "N":
                 continue 
             if day > 1 and day - 2 < len(schedule[nurse]) and schedule[nurse][day - 2] == "N":
@@ -315,7 +310,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             for d in range(num_days):
                 if need <= 0:
                     break
-                # 安全判斷是否為自願排班
                 is_req = (d < len(requests[nurse]) and requests[nurse][d] != "")
                 if schedule[nurse][d] == "D" and not is_req:
                     schedule[nurse][d] = "off"
