@@ -16,7 +16,7 @@ st.set_page_config(
 
 st.title("🏥 2F護理排班系統 (記憶體穩定版)")
 
-# ✨【核心修正】初始化 Streamlit 永久記憶體狀態，防止開網頁時噴 AttributeError
+# 初始化 Streamlit 永久記憶體狀態，防止開網頁時噴 AttributeError
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
 if "schedule_result" not in st.session_state:
@@ -239,7 +239,8 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 continue
             if not can_work_shift(permissions[nurse], "D"):
                 continue
-            if day > 0 Glen and schedule[nurse][day - 1] == "N":
+            # 🎯【精準修復】拿掉不小心打進去的幽靈單字 Glen
+            if day > 0 and schedule[nurse][day - 1] == "N":
                 continue 
             if day > 1 and schedule[nurse][day - 2] == "N":
                 continue 
@@ -406,7 +407,6 @@ if file_a and file_b:
                 )
                 st.session_state["run_success"] = True
 
-        # 這裡會安全地讀取記憶體狀態
         if st.session_state["run_success"]:
             st.success("🎉 14人動態精準權限班表計算完成！")
             result = st.session_state["schedule_result"]
