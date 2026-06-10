@@ -80,37 +80,87 @@ def load_history_from_base_schedule(upload_file, staffs):
     return staffs
 
 def load_request_table(upload_file, names, num_days):
+    """
+    精準抓取預排休表內容
+    names: 系統核心人員名單 (CORE_STAFF_NAMES)
+    num_days: 當月總天數 (例如 6 月就是 30 天)
+    """
+    # 初始化回傳結果，預設每個人每天都是空字串
     result = {n: [""] * num_days for n in names}
+    
+    # 讀取 Excel 檔案的第一張工作表 (通常就是複製出來的那張預排表)
     xl = pd.ExcelFile(upload_file)
     sheet_name = xl.sheet_names[0]
-    df = pd.read_excel(upload_file, sheet_name=sheet_name)
+    
+    # 為了防範 Excel 前面有 1~2 行的空白或大標題，我們不指定 header，由程式自己找
+    df = pd.read_excel(upload_file, sheet_name=sheet_name, header=None)
+    
+    # --- 步驟 1：自動尋找「表頭行」與「姓名欄」 ---
+    header_row_idx = 0
+    name_col_idx = 1 # 預設安全牌
+    
+    for idx, row in df.iterrows():
+        row_str = [str(x) for x in row.values]
+        # 尋找哪一行同時出現了 "姓名" 或類似護理排班的關鍵字
+        if any("姓名" in s or "人員" in s or "稱" in s for s in row_str):
+            header_row_idx = idx
+            # 抓出「姓名」具體在哪一欄
+            for col_idx, cell_value in enumerate(row_str):
+                if "姓名" in cell_value or "人員" in cell_value:
+                    name_col_idx = col_idx
+                    break
+            break
+
+    # --- 步驟 2：重新設定 DataFrame 的表頭 ---
+    # 將找到的那一行作為欄位名稱，並切除前面的無用大標題行
+    df.columns = df.iloc[header_row_idx]
+    df = df.iloc[header_row_idx + 1 :].reset_index(drop=True)
+    
+    # --- 步驟 3：開始逐行掃描同仁的預排內容 ---
     for _, row in df.iterrows():
-        person = str(row.iloc[1]).strip()
-        target = None
+        # 取得當前橫列的同仁姓名
+        raw_name = str(row.iloc[name_col_idx]).strip()
+        
+        # 檢查這個名字有沒有在我們的主系統名單 (names) 裡面
+        target_nurse = None
         for n in names:
-            if n in person:
-                target = n
+            if n in raw_name:
+                target_nurse = n
                 break
-        if not target:
+                
+        # 如果這一行不是我們要排班的護理同仁（可能是空白行或合計行），就跳過
+        if not target_nurse:
             continue
+            
+        # --- 步驟 4：精準抓取第 1 天到第 num_days 天的格子 ---
+        # 姓名欄後面通常緊接著就是 1 號、2 號... 的排班格子
+        start_data_col = name_col_idx + 1
+        
         for d in range(num_days):
-            col = d + 2
-            if col >= len(df.columns):
+            current_col_idx = start_data_col + d
+            
+            # 安全防呆：防範日期超出 Excel 的欄位右邊界
+            if current_col_idx >= len(df.columns):
                 continue
-            value = str(row.iloc[col]).strip()
-            if value == "nan" or value == "":
+                
+            # 抓取該格子的原始數值
+            cell_value = str(row.iloc[current_col_idx]).strip()
+            
+            # 排除無意義的 NaN 或空值
+            if cell_value == "nan" or cell_value == "":
                 continue
-            value = value.upper()
-            if value == "R":
-                result[target][d] = "R"
-            elif value == "D":
-                result[target][d] = "D"
-            elif value == "E":
-                result[target][d] = "E"
-            elif value == "N":
-                result[target][d] = "N"
-            elif "開會" in value or value == "M":
-                result[target][d] = "M"
+                
+            # 轉成大寫進行比對
+            cell_value_upper = cell_value.upper()
+            
+            # 判定假別與開會狀態
+            if cell_value_upper in ["R", "D", "E", "N"]:
+                result[target_nurse][d] = cell_value_upper
+            elif "開會" in cell_value or cell_value_upper == "M":
+                result[target_nurse][d] = "M"
+            elif "休" in cell_value:
+                result[target_nurse][d] = "R"  # 有些人習慣打中文「休」，自動轉成 R
+                
     return result
 
 # =====================================
