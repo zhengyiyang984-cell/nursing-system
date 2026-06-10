@@ -10,11 +10,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (半職積班完全體)",
+    page_title="2F護理排班系統 (按週排程完全體)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (半職積班完全體)")
+st.title("🏥 2F護理排班系統 (按週排程完全體)")
 
 # 初始化 Streamlit 永久記憶體狀態
 if "run_success" not in st.session_state:
@@ -181,7 +181,7 @@ def load_history_only(upload_file, names):
     return history_shift, history_streak
 
 # =====================================
-# 智慧排班引擎 (含半職郭珍君嚴格2-3天限制)
+# 智慧排班引擎 (含按週上下限精準管控)
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
@@ -196,10 +196,16 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 if requests[nurse][d] in ["E", "N"]:
                     night_count[nurse] += 1
 
-    # STEP 2: 大夜班 (N) 分配
+    # STEP 2: 大夜班 (N) 分配 —— 嚴格死守上下限
     for day in range(num_days):
         req_n_min = manpower_req[day]["N_min"]
+        req_n_max = manpower_req[day]["N_max"]
         current_n = sum(1 for n in names if schedule[n][day] == "N")
+        
+        # 如果預排班表已經塞滿或超過最大上限，直接跳過
+        if current_n >= req_n_max:
+            continue
+            
         need_n = req_n_min - current_n
         if need_n <= 0:
             continue
@@ -227,15 +233,22 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
         random.shuffle(candidates)
         candidates.sort(key=lambda x: (1 if (day < len(requests[x]) and requests[x][day] == "R") else 0, night_count[x], work_count[x]))
 
-        for nurse in candidates[:need_n]:
+        # 分配人數絕對不超過允許的最高上限
+        allowed_n_to_add = min(need_n, req_n_max - current_n)
+        for nurse in candidates[:allowed_n_to_add]:
             schedule[nurse][day] = "N"
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 3: 小夜班 (E) 分配
+    # STEP 3: 小夜班 (E) 分配 —— 嚴格死守上下限
     for day in range(num_days):
         req_e_min = manpower_req[day]["E_min"]
+        req_e_max = manpower_req[day]["E_max"]
         current_e = sum(1 for n in names if schedule[n][day] == "E")
+        
+        if current_e >= req_e_max:
+            continue
+            
         need_e = req_e_min - current_e
         if need_e <= 0:
             continue
@@ -261,46 +274,53 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
         random.shuffle(candidates)
         candidates.sort(key=lambda x: (1 if (day < len(requests[x]) and requests[x][day] == "R") else 0, night_count[x], work_count[x]))
 
-        for nurse in candidates[:need_e]:
+        allowed_e_to_add = min(need_e, req_e_max - current_e)
+        for nurse in candidates[:allowed_e_to_add]:
             schedule[nurse][day] = "E"
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 4: 白班 (D) 分配
+    # STEP 4: 白班 (D) 分配 —— 嚴格死守上下限
     for day in range(num_days):
         req_d_min = manpower_req[day]["D_min"]
+        req_d_max = manpower_req[day]["D_max"]
         current_d = sum(1 for n in names if schedule[n][day] == "D")
-        need_d = req_d_min - current_d
-        if need_d <= 0:
+        
+        if current_d >= req_d_max:
             continue
+            
+        need_d = req_d_min - current_d
+        
+        # 第一輪：常規補滿最低人數
+        if need_d > 0:
+            candidates = []
+            for nurse in names:
+                if nurse in PART_TIME_STAFFS: 
+                    continue
+                if schedule[nurse][day] != "":
+                    continue
+                if not can_work_shift(permissions[nurse], "D"):
+                    continue
+                if day > 0 and day - 1 < len(schedule[nurse]) and schedule[nurse][day - 1] == "N":
+                    continue 
+                if day > 1 and day - 2 < len(schedule[nurse]) and schedule[nurse][day - 2] == "N":
+                    continue 
+                if day < len(requests[nurse]) and requests[nurse][day] == "R":
+                    continue
+                candidates.append(nurse)
 
-        candidates = []
-        for nurse in names:
-            if nurse in PART_TIME_STAFFS: 
-                continue
-            if schedule[nurse][day] != "":
-                continue
-            if not can_work_shift(permissions[nurse], "D"):
-                continue
-            if day > 0 and day - 1 < len(schedule[nurse]) and schedule[nurse][day - 1] == "N":
-                continue 
-            if day > 1 and day - 2 < len(schedule[nurse]) and schedule[nurse][day - 2] == "N":
-                continue 
-            if day < len(requests[nurse]) and requests[nurse][day] == "R":
-                continue
-            candidates.append(nurse)
+            random.shuffle(candidates)
+            candidates.sort(key=lambda x: work_count[x])
 
-        random.shuffle(candidates)
-        candidates.sort(key=lambda x: work_count[x])
+            allowed_d_to_add = min(need_d, req_d_max - current_d)
+            for nurse in candidates[:allowed_d_to_add]:
+                schedule[nurse][day] = "D"
+                work_count[nurse] += 1
 
-        for nurse in candidates[:need_d]:
-            schedule[nurse][day] = "D"
-            work_count[nurse] += 1
-
-        # 第二輪強力救火
+        # 第二輪：深度強力救火（若仍未達標）
         current_d = sum(1 for n in names if schedule[n][day] == "D")
         need_d = req_d_min - current_d
-        if need_d > 0:
+        if need_d > 0 and current_d < req_d_max:
             backup_candidates = []
             for nurse in names:
                 if nurse in PART_TIME_STAFFS:
@@ -318,31 +338,27 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             random.shuffle(backup_candidates)
             backup_candidates.sort(key=lambda x: (1 if (day < len(requests[x]) and requests[x][day] == "R") else 0, work_count[x]))
             
-            for nurse in backup_candidates[:need_d]:
+            allowed_d_to_add = min(need_d, req_d_max - current_d)
+            for nurse in backup_candidates[:allowed_d_to_add]:
                 schedule[nurse][day] = "D"
                 work_count[nurse] += 1
 
-    # 🎯 STEP 5: 半職郭珍君「鋼鐵 2-3 天」精準區塊積班分配器 (嚴格杜絕少於2天、多於3天)
+    # STEP 5: 半職郭珍君「鋼鐵 2-3 天」精準區塊積班分配器 (不得衝破白班最高上限上限)
     for nurse in PART_TIME_STAFFS:
         if nurse in names:
-            # 硬性拆分法：10 天的預算，精準切成兩個 3 天與兩個 2 天：[3, 3, 2, 2]
             target_blocks = [3, 3, 2, 2]
-            random.shuffle(target_blocks) # 隨機打亂排序增加排班彈性
-            
+            random.shuffle(target_blocks)
             allocated_days_indices = set()
             
             for b_len in target_blocks:
                 valid_starts = []
                 
-                # 在整個月裡巡邏合法的區塊投放位置
                 for start_d in range(num_days - b_len + 1):
-                    # 邊界限制安全條款：新投放的區塊前方與後方，絕對不能與「已經排好的D班」黏在一起
                     if start_d > 0 and (start_d - 1) in allocated_days_indices:
                         continue
                     if (start_d + b_len) < num_days and (start_d + b_len) in allocated_days_indices:
                         continue
                         
-                    # 檢查這段長度內，她自己有沒有其他雜班、或是被開會M擋到
                     block_ok = True
                     total_shortage = 0
                     for offset in range(b_len):
@@ -354,8 +370,12 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                             block_ok = False
                             break
                         
-                        # 收集這幾天白班的缺人指數，挑選最缺人的連續日子投遞
+                        # 檢查加上她自己之後，那天的白班人數會不會衝破最高上限
                         c_count = sum(1 for n in names if schedule[n][curr_day] == "D")
+                        if c_count >= manpower_req[curr_day]["D_max"]:
+                            block_ok = False
+                            break
+                            
                         shortage = manpower_req[curr_day]["D_min"] - c_count
                         if shortage > 0:
                             total_shortage += shortage
@@ -363,12 +383,9 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                     if block_ok:
                         valid_starts.append((start_d, total_shortage))
                         
-                # 如果有找到合法的投放段，挑選全單位白班最缺人的黃金時段
                 if valid_starts:
                     valid_starts.sort(key=lambda x: x[1], reverse=True)
                     best_start = valid_starts[0][0]
-                    
-                    # 鋼鐵鎖定填入
                     for offset in range(b_len):
                         target_day = best_start + offset
                         schedule[nurse][target_day] = "D"
@@ -396,6 +413,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 is_req = (d < len(requests[nurse]) and requests[nurse][d] != "")
                 if schedule[nurse][d] == "D" and not is_req:
                     current_d_on_day = sum(1 for n in names if schedule[n][d] == "D")
+                    # 退假時，必須確保不會讓該日人數跌破最低需求人數
                     if current_d_on_day > manpower_req[d]["D_min"]:
                         schedule[nurse][d] = "off"
                         need -= 1
@@ -408,7 +426,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             has_rest = any(x in ["off", "R"] for x in week)
             if not has_rest and (end - 1) < num_days:
                 if (end - 1) < len(requests[nurse]) and requests[nurse][end - 1] not in ["M", "R"]:
-                    if (end - 1) not in PART_TIME_STAFFS: # 半職不干涉週休，由10天總額嚴格管控
+                    if (end - 1) not in PART_TIME_STAFFS: 
                         schedule[nurse][end - 1] = "off"
 
     for nurse in names:
@@ -455,9 +473,14 @@ if file_b:
         history_shift, history_streak = load_history_only(file_a, CORE_STAFF_NAMES)
         names = CORE_STAFF_NAMES
 
+        # 計算日期並動態切分出「第幾週」
         date_headers = []
-        manpower_setup_rows = []
-
+        weeks_map = {} # d_idx -> week_label
+        weeks_setup_data = [] # 用於配置編輯器的資料列
+        
+        current_week_idx = 1
+        last_week_no = None
+        
         for i in range(num_days):
             curr = start_date + datetime.timedelta(days=i)
             w = WEEKDAYS_CHINESE[curr.weekday()]
@@ -465,16 +488,40 @@ if file_b:
             full_header = f"{date_str}({w})"
             date_headers.append(full_header)
             
-            if curr.weekday() in [5, 6]:
-                manpower_setup_rows.append({
-                    "日期": full_header, "白班最低(D)": 3, "小夜最低(E)": 2, "大夜最低(N)": 2
-                })
-            else:
-                manpower_setup_rows.append({
-                    "日期": full_header, "白班最低(D)": 4, "小夜最低(E)": 3, "大夜最低(N)": 2
-                })
+            # 使用 ISO 週數來判斷是不是到了下一週
+            year, week_no, weekday_no = curr.isocalendar()
+            if last_week_no is not None and week_no != last_week_no:
+                current_week_idx += 1
+            last_week_no = week_no
+            
+            is_weekend = curr.weekday() in [5, 6] # 五六代表六日
+            day_type_label = "假日(六日)" if is_weekend else "平日(一五)"
+            week_label = f"第 {current_week_idx} 週"
+            
+            weeks_map[i] = {
+                "week_label": week_label,
+                "is_weekend": is_weekend
+            }
+            
+            # 建立每週平假日的配置範本列
+            setup_key = f"{week_label} - {day_type_label}"
+            if setup_key not in [x["週別與平假日"] for x in weeks_setup_data]:
+                if is_weekend:
+                    weeks_setup_data.append({
+                        "週別與平假日": setup_key, "week_id": week_label, "is_we": True,
+                        "白班最低(D Min)": 3, "白班最高(D Max)": 5,
+                        "小夜最低(E Min)": 2, "小夜最高(E Max)": 4,
+                        "大夜最低(N)": 2, "大夜最高(N Max)": 2
+                    })
+                else:
+                    weeks_setup_data.append({
+                        "週別與平假日": setup_key, "week_id": week_label, "is_we": False,
+                        "白班最低(D Min)": 4, "白班最高(D Max)": 6,
+                        "小夜最低(E Min)": 3, "小夜最高(E Max)": 4,
+                        "大夜最低(N)": 2, "大夜最高(N Max)": 2
+                    })
 
-        col1, col2 = st.columns([1, 1.2])
+        col1, col2 = st.columns([1, 1.3])
         
         with col1:
             st.subheader("👥 1. 人員初始狀態確認")
@@ -510,15 +557,37 @@ if file_b:
             )
 
         with col2:
-            st.subheader("📊 2. 自訂每日最低人力需求")
-            manpower_editor_df = st.data_editor(pd.DataFrame(manpower_setup_rows), use_container_width=True, num_rows="fixed")
+            st.subheader("📊 2. 按週智慧自訂平假日人數上下限")
+            st.caption("💡 您只需按週設定平日與假日，系統會自動展開套用到整月班表，不需逐日設定！")
+            manpower_editor_df = st.data_editor(
+                pd.DataFrame(weeks_setup_data), 
+                use_container_width=True, 
+                num_rows="fixed",
+                column_config={
+                    "週別與平假日": st.column_config.TextColumn("週別與平假日", disabled=True)
+                }
+            )
 
+        # 將按週設定的編輯器數據，精準還原展開回每日 30 天的需求清單中
         manpower_req_list = []
-        for _, row in manpower_editor_df.iterrows():
+        for d_idx in range(num_days):
+            d_info = weeks_map[d_idx]
+            target_week = d_info["week_label"]
+            target_is_we = d_info["is_weekend"]
+            
+            # 從編輯器裡抓出對應週、對應平假日的數據列
+            match_row = manpower_editor_df[
+                (manpower_editor_df["week_id"] == target_week) & 
+                (manpower_editor_df["is_we"] == target_is_we)
+            ].iloc[0]
+            
             manpower_req_list.append({
-                "D_min": int(row["白班最低(D)"]),
-                "E_min": int(row["小夜最低(E)"]),
-                "N_min": int(row["大夜最低(N)"])
+                "D_min": int(match_row["白班最低(D Min)"]),
+                "D_max": int(match_row["白班最高(D Max)"]),
+                "E_min": int(match_row["小夜最低(E Min)"]),
+                "E_max": int(match_row["小夜最高(E Max)"]),
+                "N_min": int(match_row["大夜最低(N)"]),
+                "N_max": int(match_row["大夜最高(N Max)"])
             })
 
         permissions = {}
@@ -537,7 +606,7 @@ if file_b:
 
         st.markdown("---")
         
-        if st.button("🚀 依照自訂每日人力啟動自動排班", type="primary", use_container_width=True):
+        if st.button("🚀 依照按週自訂上下限啟動自動排班", type="primary", use_container_width=True):
             with st.spinner("優化班表計算中..."):
                 st.session_state["schedule_result"] = generate_schedule(
                     names, permissions, requests, num_days,
@@ -560,9 +629,9 @@ if file_b:
                 m_count = sum(1 for n in names if result[n][d] == "M")
                 manpower_df_rows.append([
                     date_headers[d], 
-                    f"{d_count} (需求: {manpower_req_list[d]['D_min']})",
-                    f"{e_count} (需求: {manpower_req_list[d]['E_min']})",
-                    f"{n_count} (需求: {manpower_req_list[d]['N_min']})",
+                    f"{d_count} (核定範疇: {manpower_req_list[d]['D_min']}~{manpower_req_list[d]['D_max']})",
+                    f"{e_count} (核定範疇: {manpower_req_list[d]['E_min']}~{manpower_req_list[d]['E_max']})",
+                    f"{n_count} (核定範疇: {manpower_req_list[d]['N_min']}~{manpower_req_list[d]['N_max']})",
                     m_count
                 ])
             manpower_df = pd.DataFrame(manpower_df_rows, columns=["日期", "實際白班(D)", "實際小夜(E)", "實際大夜(N)", "會議開會(M)"])
