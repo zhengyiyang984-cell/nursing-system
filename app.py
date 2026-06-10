@@ -107,42 +107,77 @@ def load_request_and_permissions(upload_file, names, num_days):
     return requests_dict, permissions_dict
 
 # =====================================
-# 歷史狀態載入
+# 🎯【重大修復】基本班表歷史狀態精準對齊載入器
 # =====================================
 def load_history_only(upload_file, names):
+    """
+    精準定位基本班表中的姓名與日期排班格子，防範右側統計欄位的干擾。
+    """
     history_shift = {n: "off" for n in names}
     history_streak = {n: 0 for n in names}
     
     df = pd.read_excel(upload_file, header=None)
-    for r in range(len(df)):
-        row = [str(x).strip() for x in df.iloc[r].values]
-        row_text = "".join(row).replace(" ", "").replace(" ", "")
+    
+    header_row_idx = 0
+    name_col_idx = 1
+    
+    # 1. 尋找舊班表的表頭座標
+    for idx, row in df.iterrows():
+        row_str = [str(x) for x in row.values]
+        if any("姓名" in s or "人員" in s for s in row_str):
+            header_row_idx = idx
+            for col_idx, cell_value in enumerate(row_str):
+                if "姓名" in cell_value or "人員" in cell_value:
+                    name_col_idx = col_idx
+                    break
+            break
+
+    df.columns = df.iloc[header_row_idx]
+    df = df.iloc[header_row_idx + 1 :].reset_index(drop=True)
+    
+    for _, row in df.iterrows():
+        # 強制雙重去空格
+        raw_name = str(row.iloc[name_col_idx]).replace(" ", "").replace(" ", "").strip()
         
-        target = None
-        for nurse in names:
-            if nurse in row_text:
-                target = nurse
+        target_nurse = None
+        for n in names:
+            if n in raw_name:
+                target_nurse = n
                 break
-        if not target:
+        if not target_nurse:
             continue
             
+        # 2. 智慧撈取排班區間（從姓名右側第3欄開始，一直撈到遇到統計欄或空格為止）
+        start_data_col = name_col_idx + 3
         shifts = []
-        for cell in row:
-            cell = str(cell).upper()
-            if cell in ["D", "E", "N", "OFF", "R", "M"]:
-                shifts.append(cell)
+        
+        for c_idx in range(start_data_col, len(df.columns)):
+            col_name = str(df.columns[c_idx])
+            # 如果欄位名稱看起來像「合計」、「總計」、「夜班數」，代表排班區結束了
+            if "計" in col_name or "總" in col_name or "天" in col_name:
+                break
+                
+            cell_val = str(row.iloc[c_idx]).upper().strip()
+            if cell_val in ["D", "E", "N", "OFF", "R", "M", "NAN", ""]:
+                # 如果遇到完全無關的髒資料則忽略，只記錄常規班別
+                if cell_val in ["NAN", ""]:
+                    cell_val = "OFF"
+                shifts.append(cell_val)
+        
         if len(shifts) == 0:
             continue
             
-        history_shift[target] = shifts[-1]
+        # 3. 抓取最後一天的班別
+        history_shift[target_nurse] = shifts[-1].lower() if shifts[-1] in ["OFF", "off"] else shifts[-1]
         
+        # 4. 計算最後連續上班天數
         streak = 0
         for s in reversed(shifts):
             if s in ["D", "E", "N"]:
                 streak += 1
             else:
                 break
-        history_streak[target] = streak
+        history_streak[target_nurse] = streak
         
     return history_shift, history_streak
 
@@ -162,7 +197,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 if requests[nurse][d] in ["E", "N"]:
                     night_count[nurse] += 1
 
-    # STEP 2: 大夜班 (N) 分配
+    # STEP 2: 大夜班 (N) 分配 —— 滿載優先
     for day in range(num_days):
         req_n_min = manpower_req[day]["N_min"]
         current_n = sum(1 for n in names if schedule[n][day] == "N")
@@ -198,7 +233,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 3: 小夜班 (E) 分配
+    # STEP 3: 小夜班 (E) 分配 —— 滿載優先
     for day in range(num_days):
         req_e_min = manpower_req[day]["E_min"]
         current_e = sum(1 for n in names if schedule[n][day] == "E")
@@ -232,7 +267,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 4: 白班 (D) 分配
+    # STEP 4: 白班 (D) 分配 —— 雙重救火
     for day in range(num_days):
         req_d_min = manpower_req[day]["D_min"]
         current_d = sum(1 for n in names if schedule[n][day] == "D")
@@ -263,7 +298,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             schedule[nurse][day] = "D"
             work_count[nurse] += 1
 
-        # 第二輪救火
+        # 第二輪強力救火
         current_d = sum(1 for n in names if schedule[n][day] == "D")
         need_d = req_d_min - current_d
         if need_d > 0:
@@ -392,6 +427,7 @@ if file_a and file_b:
         num_days = (end_date - start_date).days + 1
         
         requests, extracted_permissions = load_request_and_permissions(file_b, CORE_STAFF_NAMES, num_days)
+        # 🎯【核心修復】此處改呼叫全新升級具備「座標尋軌機制」的安全歷史讀取器
         history_shift, history_streak = load_history_only(file_a, CORE_STAFF_NAMES)
         names = CORE_STAFF_NAMES
 
@@ -428,7 +464,6 @@ if file_a and file_b:
                 })
             base_config_df = pd.DataFrame(config_rows)
             
-            # 🎯【相容性修正】將 SelectColumn 替換成萬用相容的 SelectboxColumn 元件
             config_df = st.data_editor(
                 base_config_df, 
                 use_container_width=True, 
