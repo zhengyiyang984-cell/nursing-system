@@ -16,6 +16,12 @@ st.set_page_config(
 
 st.title("🏥 2F護理排班系統 (記憶體穩定版)")
 
+# ✨【核心修正】初始化 Streamlit 永久記憶體狀態，防止開網頁時噴 AttributeError
+if "run_success" not in st.session_state:
+    st.session_state["run_success"] = False
+if "schedule_result" not in st.session_state:
+    st.session_state["schedule_result"] = None
+
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
 # 核心 14 人名單
@@ -233,7 +239,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 continue
             if not can_work_shift(permissions[nurse], "D"):
                 continue
-            if day > 0 and schedule[nurse][day - 1] == "N":
+            if day > 0 Glen and schedule[nurse][day - 1] == "N":
                 continue 
             if day > 1 and schedule[nurse][day - 2] == "N":
                 continue 
@@ -392,20 +398,16 @@ if file_a and file_b:
 
         st.markdown("---")
         
-        # 🔔 點擊按鈕時，進行排班並將結果存入 st.session_state
         if st.button("🚀 依照自訂每日人力啟動自動排班", type="primary", use_container_width=True):
             with st.spinner("優化班表計算中..."):
-                # 將計算結果封裝存入記憶體
                 st.session_state["schedule_result"] = generate_schedule(
                     names, permissions, requests, num_days,
                     manpower_req_list, history_shift_final, history_streak_final
                 )
                 st.session_state["run_success"] = True
 
-        # =====================================
-        # 核心記憶體渲染機制：只要排班成功過，就持續顯示結果
-        # =====================================
-        if st.session_state.get("run_success", False):
+        # 這裡會安全地讀取記憶體狀態
+        if st.session_state["run_success"]:
             st.success("🎉 14人動態精準權限班表計算完成！")
             result = st.session_state["schedule_result"]
 
@@ -481,7 +483,6 @@ if file_a and file_b:
                     issue_df = pd.DataFrame(issues, columns=["姓名", "異常說明"])
                     st.dataframe(issue_df, use_container_width=True)
 
-            # 記憶體內的 Excel 生成與下載按決定
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 schedule_df.to_excel(writer, sheet_name="班表")
@@ -493,7 +494,7 @@ if file_a and file_b:
             st.download_button(
                 label="📥 下載 14人最終精準權限版 Excel",
                 data=output.getvalue(),
-                file_name=f"2F護理排班結果_穩定版_{start_date.strftime('%m%d')}.xlsx",
+                file_name=f"2F護理排班結果_{start_date.strftime('%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
