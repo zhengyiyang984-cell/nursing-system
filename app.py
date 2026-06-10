@@ -10,12 +10,13 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (白班強化版)",
+    page_title="2F護理排班系統",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (白班強化版)")
+st.title("🏥 2F護理排班系統")
 
+# 初始化 Streamlit 永久記憶體狀態
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
 if "schedule_result" not in st.session_state:
@@ -23,14 +24,17 @@ if "schedule_result" not in st.session_state:
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
+# 核心 14 人名單
 CORE_STAFF_NAMES = [
     "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
     "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
     "汪家容", "林欣儀", "林怡微", "陳威宇"
 ]
 
+# 兼職人員名單
 PART_TIME_STAFFS = ["郭珍君"] 
 
+# 備用安全底牌
 DEFAULT_PERMISSIONS = {
     "郭珍君": "D", "劉榆琳": "N", "陳義樺": "N", "李雅慧": "DEN", 
     "蔡靜如": "DEN", "陳慧屏": "DEN", "黃家靜": "DEN", "許雅雯": "DEN", 
@@ -143,14 +147,13 @@ def load_history_only(upload_file, names):
     return history_shift, history_streak
 
 # =====================================
-# 智慧排班引擎 (白班深度優化版)
+# 智慧排班引擎
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
     night_count = {n: 0 for n in names}
     work_count = {n: 0 for n in names}
 
-    # STEP 1: 匯入預排班別
     for nurse in names:
         for d in range(num_days):
             if d < len(requests[nurse]) and requests[nurse][d] in ["M", "D", "E", "N"]:
@@ -159,7 +162,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 if requests[nurse][d] in ["E", "N"]:
                     night_count[nurse] += 1
 
-    # STEP 2: 大夜班 (N) 分配
+    # STEP 2: 大夜班 (N) 分配 —— 滿載優先
     for day in range(num_days):
         req_n_min = manpower_req[day]["N_min"]
         current_n = sum(1 for n in names if schedule[n][day] == "N")
@@ -195,7 +198,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 3: 小夜班 (E) 分配
+    # STEP 3: 小夜班 (E) 分配 —— 滿載優先
     for day in range(num_days):
         req_e_min = manpower_req[day]["E_min"]
         current_e = sum(1 for n in names if schedule[n][day] == "E")
@@ -229,7 +232,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 4: 白班 (D) 分配 —— 🎯【強力優化處：引入雙重救火機制】
+    # STEP 4: 白班 (D) 分配 —— 雙重救火
     for day in range(num_days):
         req_d_min = manpower_req[day]["D_min"]
         current_d = sum(1 for n in names if schedule[n][day] == "D")
@@ -237,7 +240,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
         if need_d <= 0:
             continue
 
-        # 第一輪：挑選狀態最完美的人（沒上過 N 班、沒預排休）
         candidates = []
         for nurse in names:
             if nurse in PART_TIME_STAFFS: 
@@ -261,7 +263,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             schedule[nurse][day] = "D"
             work_count[nurse] += 1
 
-        # 第二輪：如果第一輪分完，白班還是不夠人！啟動大局調度（只要前一天不是大夜，都可以抓來救火）
+        # 第二輪強力救火
         current_d = sum(1 for n in names if schedule[n][day] == "D")
         need_d = req_d_min - current_d
         if need_d > 0:
@@ -273,7 +275,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                     continue
                 if not can_work_shift(permissions[nurse], "D"):
                     continue
-                # 臨床鐵律底線：前一天是大夜班(N)的人絕對不能上今天的白班(D)
                 if day > 0 and day - 1 < len(schedule[nurse]) and schedule[nurse][day - 1] == "N":
                     continue
                 if day == 0 and history_shift.get(nurse) == "N":
@@ -287,7 +288,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 schedule[nurse][day] = "D"
                 work_count[nurse] += 1
 
-    # STEP 5: 半職郭珍君智慧補洞 (全力支援剩餘的白班缺口)
+    # STEP 5: 半職郭珍君智慧補洞
     for nurse in PART_TIME_STAFFS:
         if nurse in names:
             allocated_days = 0
@@ -324,7 +325,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 else:
                     schedule[nurse][d] = "off"
 
-    # STEP 7: 法定休假天數多退少補防線
+    # STEP 7: 法定休假天數多退少補
     for nurse in names:
         if nurse in PART_TIME_STAFFS:
             continue
@@ -335,7 +336,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 if need <= 0:
                     break
                 is_req = (d < len(requests[nurse]) and requests[nurse][d] != "")
-                # 如果要退班換成假，優先從白班人數超出需求的日期去退
                 if schedule[nurse][d] == "D" and not is_req:
                     current_d_on_day = sum(1 for n in names if schedule[n][d] == "D")
                     if current_d_on_day > manpower_req[d]["D_min"]:
@@ -427,7 +427,29 @@ if file_a and file_b:
                     "已連上天數": history_streak[nurse]
                 })
             base_config_df = pd.DataFrame(config_rows)
-            config_df = st.data_editor(base_config_df, use_container_width=True, num_rows="fixed")
+            
+            # 🎯【核心升級：將權限與上月最後班強制綁定為「下拉選單」設定】
+            config_df = st.data_editor(
+                base_config_df, 
+                use_container_width=True, 
+                num_rows="fixed",
+                column_config={
+                    "姓名": st.column_config.TextColumn("姓名", disabled=True), # 姓名防呆鎖死
+                    "權限": st.column_config.SelectColumn(
+                        "權限",
+                        help="設定同仁當月可排班別範疇",
+                        options=["DEN", "DE", "DN", "EN", "D", "E", "N"],
+                        required=True
+                    ),
+                    "上月最後班": st.column_config.SelectColumn(
+                        "上月最後班",
+                        help="跨月排班安全防呆依據",
+                        options=["D", "E", "N", "off", "R", "M"],
+                        required=True
+                    ),
+                    "已連上天數": st.column_config.NumberColumn("已連上天數", min_value=0, max_value=5, step=1)
+                }
+            )
 
         with col2:
             st.subheader("📊 2. 自訂每日最低人力需求")
@@ -441,6 +463,7 @@ if file_a and file_b:
                 "N_min": int(row["大夜最低(N)"])
             })
 
+        # 雙向清洗
         permissions = {}
         history_shift_final = {}
         history_streak_final = {}
@@ -519,7 +542,7 @@ if file_a and file_b:
                 if nurse in PART_TIME_STAFFS:
                     d_count = sum(1 for x in result[nurse] if x == "D")
                     if d_count > 10:
-                        issues.append([nurse, f"兼職人員排班限制：白班超過 10 天 ({d_count}天)"])
+                        issues.append([nurse, f"兼兼職人員排班限制：白班超過 10 天 ({d_count}天)"])
                     if any(x in ["E", "N"] for x in result[nurse]):
                         issues.append([nurse, "兼職人員排班錯誤：出現非白班(E/N班)"])
 
