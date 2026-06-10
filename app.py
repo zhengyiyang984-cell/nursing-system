@@ -10,13 +10,12 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (精準完全體)",
+    page_title="2F護理排班系統 (白班強化版)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (精準完全體)")
+st.title("🏥 2F護理排班系統 (白班強化版)")
 
-# 初始化 Streamlit 永久記憶體狀態
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
 if "schedule_result" not in st.session_state:
@@ -24,17 +23,14 @@ if "schedule_result" not in st.session_state:
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# 核心 14 人名單
 CORE_STAFF_NAMES = [
     "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
     "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
     "汪家容", "林欣儀", "林怡微", "陳威宇"
 ]
 
-# 兼職人員名單
 PART_TIME_STAFFS = ["郭珍君"] 
 
-# 備用安全底牌
 DEFAULT_PERMISSIONS = {
     "郭珍君": "D", "劉榆琳": "N", "陳義樺": "N", "李雅慧": "DEN", 
     "蔡靜如": "DEN", "陳慧屏": "DEN", "黃家靜": "DEN", "許雅雯": "DEN", 
@@ -147,13 +143,14 @@ def load_history_only(upload_file, names):
     return history_shift, history_streak
 
 # =====================================
-# 智慧排班引擎
+# 智慧排班引擎 (白班深度優化版)
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
     night_count = {n: 0 for n in names}
     work_count = {n: 0 for n in names}
 
+    # STEP 1: 匯入預排班別
     for nurse in names:
         for d in range(num_days):
             if d < len(requests[nurse]) and requests[nurse][d] in ["M", "D", "E", "N"]:
@@ -162,7 +159,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 if requests[nurse][d] in ["E", "N"]:
                     night_count[nurse] += 1
 
-    # STEP 2: 大夜班 (N) 分配 —— 滿載優先
+    # STEP 2: 大夜班 (N) 分配
     for day in range(num_days):
         req_n_min = manpower_req[day]["N_min"]
         current_n = sum(1 for n in names if schedule[n][day] == "N")
@@ -184,7 +181,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 continue
             candidates.append(nurse)
 
-        # 大夜班極限救火防線
         if len(candidates) < need_n:
             for nurse in names:
                 if nurse not in PART_TIME_STAFFS and schedule[nurse][day] == "" and can_work_shift(permissions[nurse], "N"):
@@ -233,7 +229,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 4: 白班 (D) 分配
+    # STEP 4: 白班 (D) 分配 —— 🎯【強力優化處：引入雙重救火機制】
     for day in range(num_days):
         req_d_min = manpower_req[day]["D_min"]
         current_d = sum(1 for n in names if schedule[n][day] == "D")
@@ -241,6 +237,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
         if need_d <= 0:
             continue
 
+        # 第一輪：挑選狀態最完美的人（沒上過 N 班、沒預排休）
         candidates = []
         for nurse in names:
             if nurse in PART_TIME_STAFFS: 
@@ -253,24 +250,44 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 continue 
             if day > 1 and day - 2 < len(schedule[nurse]) and schedule[nurse][day - 2] == "N":
                 continue 
+            if day < len(requests[nurse]) and requests[nurse][day] == "R":
+                continue
             candidates.append(nurse)
 
-        if len(candidates) < need_d:
-            for nurse in names:
-                if nurse not in PART_TIME_STAFFS and schedule[nurse][day] == "" and can_work_shift(permissions[nurse], "D"):
-                    if day > 0 and day - 1 < len(schedule[nurse]) and schedule[nurse][day - 1] == "N":
-                        continue
-                    if nurse not in candidates:
-                        candidates.append(nurse)
-
         random.shuffle(candidates)
-        candidates.sort(key=lambda x: (1 if (day < len(requests[x]) and requests[x][day] == "R") else 0, work_count[x]))
+        candidates.sort(key=lambda x: work_count[x])
 
         for nurse in candidates[:need_d]:
             schedule[nurse][day] = "D"
             work_count[nurse] += 1
 
-    # STEP 5: 半職郭珍君智慧補洞
+        # 第二輪：如果第一輪分完，白班還是不夠人！啟動大局調度（只要前一天不是大夜，都可以抓來救火）
+        current_d = sum(1 for n in names if schedule[n][day] == "D")
+        need_d = req_d_min - current_d
+        if need_d > 0:
+            backup_candidates = []
+            for nurse in names:
+                if nurse in PART_TIME_STAFFS:
+                    continue
+                if schedule[nurse][day] != "":
+                    continue
+                if not can_work_shift(permissions[nurse], "D"):
+                    continue
+                # 臨床鐵律底線：前一天是大夜班(N)的人絕對不能上今天的白班(D)
+                if day > 0 and day - 1 < len(schedule[nurse]) and schedule[nurse][day - 1] == "N":
+                    continue
+                if day == 0 and history_shift.get(nurse) == "N":
+                    continue
+                backup_candidates.append(nurse)
+            
+            random.shuffle(backup_candidates)
+            backup_candidates.sort(key=lambda x: (1 if (day < len(requests[x]) and requests[x][day] == "R") else 0, work_count[x]))
+            
+            for nurse in backup_candidates[:need_d]:
+                schedule[nurse][day] = "D"
+                work_count[nurse] += 1
+
+    # STEP 5: 半職郭珍君智慧補洞 (全力支援剩餘的白班缺口)
     for nurse in PART_TIME_STAFFS:
         if nurse in names:
             allocated_days = 0
@@ -307,7 +324,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 else:
                     schedule[nurse][d] = "off"
 
-    # STEP 7: 法定休假天數多退少補
+    # STEP 7: 法定休假天數多退少補防線
     for nurse in names:
         if nurse in PART_TIME_STAFFS:
             continue
@@ -318,9 +335,12 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 if need <= 0:
                     break
                 is_req = (d < len(requests[nurse]) and requests[nurse][d] != "")
+                # 如果要退班換成假，優先從白班人數超出需求的日期去退
                 if schedule[nurse][d] == "D" and not is_req:
-                    schedule[nurse][d] = "off"
-                    need -= 1
+                    current_d_on_day = sum(1 for n in names if schedule[n][d] == "D")
+                    if current_d_on_day > manpower_req[d]["D_min"]:
+                        schedule[nurse][d] = "off"
+                        need -= 1
 
     # STEP 8: 每週一休與連 5 防呆
     for nurse in names:
@@ -352,7 +372,7 @@ def can_work_shift(permission, shift):
     return shift in permission
 
 # =====================================
-# 側邊欄與主要畫面宣告 (🎯 核心對齊修正處)
+# 側邊欄與主要畫面宣告
 # =====================================
 
 with st.sidebar:
@@ -360,7 +380,6 @@ with st.sidebar:
     start_date = st.date_input("開始日期", datetime.date.today().replace(day=1))
     end_date = st.date_input("結束日期", datetime.date.today())
     st.markdown("---")
-    # 🎯 保證最頂層的變數名稱就是 file_a 與 file_b，且絕對不被包在任何 if 內
     file_a = st.file_uploader("基本班表", type=["xlsx"])
     file_b = st.file_uploader("預排休表", type=["xlsx"])
 
