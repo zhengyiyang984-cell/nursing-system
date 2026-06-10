@@ -147,7 +147,7 @@ def load_history_only(upload_file, names):
     return history_shift, history_streak
 
 # =====================================
-# 智慧排班引擎 (完全體修正版)
+# 智慧排班引擎 (雜訊全清空完美版)
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
@@ -166,7 +166,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
     for day in range(num_days):
         req_n_min = manpower_req[day]["N_min"]
         current_n = sum(1 for n in names if schedule[n][day] == "N")
-        # 🎯【精準修復】完全移除不小心黏在一起的 = n_min 語法錯誤
         need_n = req_n_min - current_n
         if need_n <= 0:
             continue
@@ -200,7 +199,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 3: 小夜班 (E) 分配
+    # STEP 3: 小夜班 (E) 分配 —— 滿載優先
     for day in range(num_days):
         req_e_min = manpower_req[day]["E_min"]
         current_e = sum(1 for n in names if schedule[n][day] == "E")
@@ -222,7 +221,8 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
 
         if len(candidates) < need_e:
             for nurse in names:
-                if nurse not in PART_TIME_STAFFS Glen and schedule[nurse][day] == "" and can_work_shift(permissions[nurse], "E"):
+                # 🎯【精準修復】徹底移除了第 215 行多寫的 Glen 雜訊
+                if nurse not in PART_TIME_STAFFS and schedule[nurse][day] == "" and can_work_shift(permissions[nurse], "E"):
                     if nurse not in candidates:
                         candidates.append(nurse)
 
@@ -234,7 +234,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 4: 白班 (D) 分配
+    # STEP 4: 白班 (D) 分配 —— 全職填補
     for day in range(num_days):
         req_d_min = manpower_req[day]["D_min"]
         current_d = sum(1 for n in names if schedule[n][day] == "D")
@@ -415,4 +415,118 @@ if file_a and file_b:
         for _, row in config_df.iterrows():
             nurse = row["姓名"]
             permissions[nurse] = str(row["權限"]).upper()
-            history_shift
+            history_shift_final[nurse] = str(row["上月最後班"])
+            history_streak_final[nurse] = int(row["已連上天數"])
+
+        st.markdown("---")
+        
+        if st.button("🚀 依照自訂每日人力啟動自動排班", type="primary", use_container_width=True):
+            with st.spinner("優化班表計算中..."):
+                st.session_state["schedule_result"] = generate_schedule(
+                    names, permissions, requests, num_days,
+                    manpower_req_list, history_shift_final, history_streak_final
+                )
+                st.session_state["run_success"] = True
+
+        if st.session_state["run_success"]:
+            result = st.session_state["schedule_result"]
+
+            # 確實生成四大報表
+            schedule_df = pd.DataFrame(result).T
+            schedule_df.columns = date_headers
+            schedule_df.insert(0, "班別權限", [permissions[n] for n in schedule_df.index])
+
+            manpower_rows = []
+            for d in range(num_days):
+                d_count = sum(1 for n in names if result[n][d] == "D")
+                e_count = sum(1 for n in names if result[n][d] == "E")
+                n_count = sum(1 for n in names if result[n][d] == "N")
+                m_count = sum(1 for n in names if result[n][d] == "M")
+                manpower_rows.append([
+                    date_headers[d], 
+                    f"{d_count} (需求: {manpower_req_list[d]['D_min']})",
+                    f"{e_count} (需求: {manpower_req_list[d]['E_min']})",
+                    f"{n_count} (需求: {manpower_req_list[d]['N_min']})",
+                    m_count
+                ])
+            manpower_df = pd.DataFrame(manpower_rows, columns=["日期", "實際白班(D)", "實際小夜(E)", "實際大夜(N)", "會議開會(M)"])
+
+            holiday_rows = []
+            for nurse in names:
+                r_count = sum(1 for x in result[nurse] if x == "R")
+                off_count = sum(1 for x in result[nurse] if x == "off")
+                holiday_rows.append([nurse, r_count, off_count, r_count + off_count])
+            holiday_df = pd.DataFrame(holiday_rows, columns=["姓名", "預排休(R)", "常規OFF", "總休假天數"])
+
+            night_df_rows = []
+            for nurse in names:
+                e_count = sum(1 for x in result[nurse] if x == "E")
+                n_count = sum(1 for x in result[nurse] if x == "N")
+                night_df_rows.append([nurse, e_count, n_count, e_count + n_count])
+            night_df = pd.DataFrame(night_df_rows, columns=["姓名", "小夜(E)", "大夜(N)", "夜班總計"])
+
+            issues = []
+            for nurse in names:
+                if nurse not in PART_TIME_STAFFS:
+                    total_rest = sum(1 for x in result[nurse] if x in ["off", "R"])
+                    if total_rest < 8:
+                        issues.append([nurse, f"符合勞基法排班不符：當月總休假不足 8 天 ({total_rest}天)"])
+                streak = 0
+                for shift in result[nurse]:
+                    if shift in ["D", "E", "N"]:
+                        streak += 1
+                    else:
+                        streak = 0
+                    if streak > 5:
+                        issues.append([nurse, "違反連續上班上限：連續工作超過 5 天"])
+                        break
+                if nurse in PART_TIME_STAFFS:
+                    d_count = sum(1 for x in result[nurse] if x == "D")
+                    if d_count > 10:
+                        issues.append([nurse, f"兼職人員排班限制：白班超過 10 天 ({d_count}天)"])
+                    if any(x in ["E", "N"] for x in result[nurse]):
+                        issues.append([nurse, "兼職人員排班錯誤：出現非白班(E/N班)"])
+
+            # 畫面分頁
+            tabs = st.tabs(["📅 最終班表", "📊 每日實際人力", "🏖️ 休假統計", "🌙 夜班統計", "🔍 規則檢查"])
+
+            with tabs[0]:
+                st.dataframe(schedule_df, use_container_width=True, height=500)
+
+            with tabs[1]:
+                st.dataframe(manpower_df, use_container_width=True)
+
+            with tabs[2]:
+                st.dataframe(holiday_df, use_container_width=True)
+
+            with tabs[3]:
+                st.dataframe(night_df, use_container_width=True)
+
+            with tabs[4]:
+                if len(issues) == 0:
+                    st.success("🎉 太棒了！14位護理同仁權限與假別完全精準抓取，排班完美達標！")
+                else:
+                    issue_df = pd.DataFrame(issues, columns=["姓名", "異常說明"])
+                    st.dataframe(issue_df, use_container_width=True)
+
+            # Excel 下載
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                schedule_df.to_excel(writer, sheet_name="班表")
+                manpower_df.to_excel(writer, sheet_name="每日實際人力", index=False)
+                holiday_df.to_excel(writer, sheet_name="休假統計", index=False)
+                night_df.to_excel(writer, sheet_name="夜班統計", index=False)
+                
+            st.markdown("---")
+            st.download_button(
+                label="📥 下載 14人最終精準權限版 Excel",
+                data=output.getvalue(),
+                file_name=f"2F護理排班結果_{start_date.strftime('%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+    except Exception as e:
+        st.error(f"系統執行時發生錯誤：{str(e)}")
+else:
+    st.info("💡 請上傳【基本班表】與【預排休表】，系統會自動從 D 欄抓取每名同仁的當月排班權限。")
