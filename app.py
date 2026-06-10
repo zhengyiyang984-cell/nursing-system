@@ -10,11 +10,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (記憶鎖定完全體)",
+    page_title="2F護理排班系統 (極致穩定版)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (記憶鎖定完全體)")
+st.title("🏥 2F護理排班系統 (極致穩定版)")
 
 # 初始化 Streamlit 永久記憶體狀態
 if "run_success" not in st.session_state:
@@ -24,7 +24,7 @@ if "schedule_result" not in st.session_state:
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# 🎯【繁簡體校正】將 "陈慧屏" 修正為正體中文 "陳慧屏"
+# 核心 14 人名單
 CORE_STAFF_NAMES = [
     "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
     "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
@@ -382,7 +382,8 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             end = min(start + 7, num_days)
             week = schedule[nurse][start:end]
             has_rest = any(x in ["off", "R"] for x in week)
-            if not has_rest && (end - 1) < num_days:
+            # 🎯【精準修復】將這裡的手誤 && 改回 Python 的標準 and 語法
+            if not has_rest and (end - 1) < num_days:
                 if (end - 1) < len(requests[nurse]) and requests[nurse][end - 1] not in ["M", "R"]:
                     schedule[nurse][end - 1] = "off"
 
@@ -526,20 +527,20 @@ if file_b:
             schedule_df.columns = date_headers
             schedule_df.insert(0, "班別權限", [permissions.get(n, "DEN") for n in schedule_df.index])
 
-            manpower_rows = []
+            manpower_df_rows = []
             for d in range(num_days):
                 d_count = sum(1 for n in names if result[n][d] == "D")
                 e_count = sum(1 for n in names if result[n][d] == "E")
                 n_count = sum(1 for n in names if result[n][d] == "N")
                 m_count = sum(1 for n in names if result[n][d] == "M")
-                manpower_rows.append([
+                manpower_df_rows.append([
                     date_headers[d], 
                     f"{d_count} (需求: {manpower_req_list[d]['D_min']})",
                     f"{e_count} (需求: {manpower_req_list[d]['E_min']})",
                     f"{n_count} (需求: {manpower_req_list[d]['N_min']})",
                     m_count
                 ])
-            manpower_df = pd.DataFrame(manpower_rows, columns=["日期", "實際白班(D)", "實際小夜(E)", "實際大夜(N)", "會議開會(M)"])
+            manpower_df = pd.DataFrame(manpower_df_rows, columns=["日期", "實際白班(D)", "實際小夜(E)", "實際大夜(N)", "會議開會(M)"])
 
             holiday_rows = []
             for nurse in names:
@@ -589,4 +590,32 @@ if file_b:
                 st.dataframe(holiday_df, use_container_width=True)
 
             with tabs[3]:
-                st.dataframe(night_df, use
+                st.dataframe(night_df, use_container_width=True)
+
+            with tabs[4]:
+                if len(issues) == 0:
+                    st.success("🎉 太棒了！14位護理同仁權限與假別完全精準抓取，排班完美達標！")
+                else:
+                    issue_df = pd.DataFrame(issues, columns=["姓名", "異常說明"])
+                    st.dataframe(issue_df, use_container_width=True)
+
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                schedule_df.to_excel(writer, sheet_name="班表")
+                manpower_df.to_excel(writer, sheet_name="每日實際人力", index=False)
+                holiday_df.to_excel(writer, sheet_name="休假統計", index=False)
+                night_df.to_excel(writer, sheet_name="夜班統計", index=False)
+                
+            st.markdown("---")
+            st.download_button(
+                label="📥 下載 14人最終精準權限版 Excel",
+                data=output.getvalue(),
+                file_name=f"2F護理排班結果_{start_date.strftime('%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+    except Exception as e:
+        st.error(f"系統執行時發生錯誤：{str(e)}")
+else:
+    st.info("💡 請上傳當月【預排休表】（基本班表可選填上傳）以啟動系統。")
