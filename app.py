@@ -10,11 +10,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (資料抽離穩定版)",
+    page_title="2F護理排班系統 (參數校正穩定版)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (資料抽離穩定版)")
+st.title("🏥 2F護理排班系統 (參數校正穩定版)")
 
 # 初始化 Streamlit 永久記憶體狀態，防止開網頁時噴 AttributeError
 if "run_success" not in st.session_state:
@@ -405,26 +405,21 @@ if file_a and file_b:
         
         if st.button("🚀 依照自訂每日人力啟動自動排班", type="primary", use_container_width=True):
             with st.spinner("優化班表計算中..."):
+                # 🎯【核心精準修正】確實對齊 7 個參數，移除重複與錯位
                 st.session_state["schedule_result"] = generate_schedule(
                     names, permissions, requests, num_days,
                     manpower_req_list, history_shift_final, history_streak_final
                 )
                 st.session_state["run_success"] = True
 
-        # ====================================================
-        # 🔒 【關鍵修正機制】只要排班成功過，立刻在記憶體中生成所有完整報表！
-        # ====================================================
         if st.session_state["run_success"]:
-            st.success("🎉 14人動態精準權限班表計算完成！")
             result = st.session_state["schedule_result"]
 
-            # 🎯 這裡在最頂層就將四大報表的 DataFrame 確實宣告好，避開 TAB 內部範圍限制
-            # 1. 班表
+            # 將四大報表的 DataFrame 確實宣告在最頂層
             schedule_df = pd.DataFrame(result).T
             schedule_df.columns = date_headers
             schedule_df.insert(0, "班別權限", [permissions[n] for n in schedule_df.index])
 
-            # 2. 每日實際人力
             manpower_rows = []
             for d in range(num_days):
                 d_count = sum(1 for n in names if result[n][d] == "D")
@@ -440,7 +435,6 @@ if file_a and file_b:
                 ])
             manpower_df = pd.DataFrame(manpower_rows, columns=["日期", "實際白班(D)", "實際小夜(E)", "實際大夜(N)", "會議開會(M)"])
 
-            # 3. 休假統計
             holiday_rows = []
             for nurse in names:
                 r_count = sum(1 for x in result[nurse] if x == "R")
@@ -448,7 +442,6 @@ if file_a and file_b:
                 holiday_rows.append([nurse, r_count, off_count, r_count + off_count])
             holiday_df = pd.DataFrame(holiday_rows, columns=["姓名", "預排休(R)", "常規OFF", "總休假天數"])
 
-            # 4. 夜班統計
             night_rows = []
             for nurse in names:
                 e_count = sum(1 for x in result[nurse] if x == "E")
@@ -456,7 +449,6 @@ if file_a and file_b:
                 night_rows.append([nurse, e_count, n_count, e_count + n_count])
             night_df = pd.DataFrame(night_rows, columns=["姓名", "小夜(E)", "大夜(N)", "夜班總計"])
 
-            # 5. 規則檢查
             issues = []
             for nurse in names:
                 if nurse not in PART_TIME_STAFFS:
@@ -479,7 +471,7 @@ if file_a and file_b:
                     if any(x in ["E", "N"] for x in result[nurse]):
                         issues.append([nurse, "兼職人員排班錯誤：出現非白班(E/N班)"])
 
-            # --- 畫面渲染分頁 (TAB 內部只單純用 st.dataframe 讀取上面算好的資料) ---
+            # 畫面渲染分頁 (TAB)
             tabs = st.tabs(["📅 最終班表", "📊 每日實際人力", "🏖️ 休假統計", "🌙 夜班統計", "🔍 規則檢查"])
 
             with tabs[0]:
