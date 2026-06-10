@@ -10,13 +10,13 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (極限防呆穩定版)",
+    page_title="2F護理排班系統 (精準完全體)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (極限防呆穩定版)")
+st.title("🏥 2F護理排班系統 (精準完全體)")
 
-# 初始化 Streamlit 永久記憶體狀態，防止開網頁時噴 AttributeError
+# 初始化 Streamlit 永久記憶體狀態
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
 if "schedule_result" not in st.session_state:
@@ -43,7 +43,7 @@ DEFAULT_PERMISSIONS = {
 }
 
 # =====================================
-# 預排休表智慧雙挖取器
+# 預排休表智慧雙挖取器 (強化去空格機制)
 # =====================================
 def load_request_and_permissions(upload_file, names, num_days):
     requests_dict = {n: [""] * num_days for n in names}
@@ -54,7 +54,7 @@ def load_request_and_permissions(upload_file, names, num_days):
     df = pd.read_excel(upload_file, sheet_name=sheet_name, header=None)
     
     header_row_idx = 0
-    name_col_idx = 1
+    name_col_idx = 1 
     
     for idx, row in df.iterrows():
         row_str = [str(x) for x in row.values]
@@ -70,7 +70,9 @@ def load_request_and_permissions(upload_file, names, num_days):
     df = df.iloc[header_row_idx + 1 :].reset_index(drop=True)
     
     for _, row in df.iterrows():
-        raw_name = str(row.iloc[name_col_idx]).strip()
+        # 🎯【核心優化】強制將 Excel 的姓名去除所有中英文空格，防止 "李雅慧 " 比對失敗
+        raw_name = str(row.iloc[name_col_idx]).replace(" ", "").replace(" ", "").strip()
+        
         target_nurse = None
         for n in names:
             if n in raw_name:
@@ -79,12 +81,14 @@ def load_request_and_permissions(upload_file, names, num_days):
         if not target_nurse:
             continue
             
+        # 精準挖取 D 欄 的權限
         permission_col_idx = name_col_idx + 2
         if permission_col_idx < len(df.columns):
             perm_val = str(row.iloc[permission_col_idx]).upper().strip()
             if perm_val in ["D", "E", "N", "DE", "DN", "EN", "DEN"]:
                 permissions_dict[target_nurse] = perm_val
 
+        # 精準對齊 E 欄開始的預排假別
         start_data_col = name_col_idx + 3
                 
         for d in range(num_days):
@@ -106,7 +110,7 @@ def load_request_and_permissions(upload_file, names, num_days):
     return requests_dict, permissions_dict
 
 # =====================================
-# 歷史狀態載入
+# 歷史狀態載入 (同步加入去空格機制)
 # =====================================
 def load_history_only(upload_file, names):
     history_shift = {n: "off" for n in names}
@@ -115,7 +119,7 @@ def load_history_only(upload_file, names):
     df = pd.read_excel(upload_file, header=None)
     for r in range(len(df)):
         row = [str(x).strip() for x in df.iloc[r].values]
-        row_text = "".join(row)
+        row_text = "".join(row).replace(" ", "").replace(" ", "")
         
         target = None
         for nurse in names:
@@ -165,7 +169,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
     for day in range(num_days):
         req_n_min = manpower_req[day]["N_min"]
         current_n = sum(1 for n in names if schedule[n][day] == "N")
-        # 🎯【核心精準修正】修正此處多餘的 = n_min 賦值錯誤
         need_n = req_n_min - current_n
         if need_n <= 0:
             continue
