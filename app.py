@@ -27,16 +27,29 @@ CORE_STAFF_NAMES = [
 def load_base_schedule(upload_file):
     df = pd.read_excel(upload_file, header=None)
     staffs = {}
+
     for r in range(len(df)):
+        # 轉換成字串並清除空白
         row = [str(x).strip() for x in df.iloc[r].values]
         row_text = "".join(row)
+
         for nurse in CORE_STAFF_NAMES:
             if nurse in row_text:
-                permission = "DEN"
+                # --- 核心優化：智慧權限判定 ---
+                # 預設給予全職全權限 "DEN" (除了兼職郭珍君以外)
+                permission = "D" if nurse == "郭珍君" else "DEN" 
+                
+                # 掃描該行名字附近的格子，看有沒有刻意寫著權限字眼
                 for cell in row:
-                    cell = str(cell).upper()
-                    if cell in ["D", "E", "N", "DE", "DN", "EN", "DEN"]:
-                        permission = cell
+                    cell_upper = str(cell).upper().strip()
+                    # 精準比對：只有當格子完全等於這些權限字串時，才覆蓋預設權限
+                    if cell_upper in ["D", "E", "N", "DE", "DN", "EN", "DEN"]:
+                        # 防呆：避免把同仁名字後面的第一天班表（剛好是D或E）誤認成權限
+                        # 只有當這格字串長度大於 1 (如 DE, DEN) 或者是獨立在名字旁邊時才納入
+                        if len(cell_upper) > 1 or cell_upper == "N": 
+                            permission = cell_upper
+
+                # 寫入系統暫存器
                 staffs[nurse] = {
                     "permission": permission,
                     "last_shift": "off",
