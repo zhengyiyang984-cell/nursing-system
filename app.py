@@ -24,7 +24,7 @@ if "schedule_result" not in st.session_state:
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# 核心 14 人名單
+# 核心 14 人名單 (後台一律用最乾淨的文字進行索引)
 CORE_STAFF_NAMES = [
     "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
     "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
@@ -397,7 +397,9 @@ if file_a and file_b:
                     "上月最後班": history_shift[nurse],
                     "已連上天數": history_streak[nurse]
                 })
-            config_df = st.data_editor(pd.DataFrame(config_rows), use_container_width=True, num_rows="fixed")
+            # 將基礎表格資料包裝
+            base_config_df = pd.DataFrame(config_rows)
+            config_df = st.data_editor(base_config_df, use_container_width=True, num_rows="fixed")
 
         with col2:
             st.subheader("📊 2. 自訂每日最低人力需求")
@@ -411,15 +413,20 @@ if file_a and file_b:
                 "N_min": int(row["大夜最低(N)"])
             })
 
-        # 🎯【關鍵修正】在解析前端互動表格時，強制對姓名進行全面去空格
+        # 🎯【核心精準修正】雙向清洗：不依賴 row 內部的內嵌 Key，直接將欄位值強制轉換、徹底拔除空格
         permissions = {}
         history_shift_final = {}
         history_streak_final = {}
-        for _, row in config_df.iterrows():
-            nurse = str(row["姓名"]).replace(" ", "").replace(" ", "").strip()
-            permissions[nurse] = str(row["權限"]).upper().strip()
-            history_shift_final[nurse] = str(row["上月最後班"]).strip()
-            history_streak_final[nurse] = int(row["已連上天數"])
+        
+        for idx in range(len(config_df)):
+            raw_name = str(config_df.iloc[idx]["姓名"]).replace(" ", "").replace(" ", "").strip()
+            raw_perm = str(config_df.iloc[idx]["權限"]).upper().strip()
+            raw_shift = str(config_df.iloc[idx]["上月最後班"]).strip()
+            raw_streak = int(config_df.iloc[idx]["已連上天數"])
+            
+            permissions[raw_name] = raw_perm
+            history_shift_final[raw_name] = raw_shift
+            history_streak_final[raw_name] = raw_streak
 
         st.markdown("---")
         
@@ -434,10 +441,10 @@ if file_a and file_b:
         if st.session_state["run_success"]:
             result = st.session_state["schedule_result"]
 
-            # 生成大報表 (這裡的索引 n 都會完美配對去空格後的乾淨名字)
+            # 生成大報表
             schedule_df = pd.DataFrame(result).T
             schedule_df.columns = date_headers
-            schedule_df.insert(0, "班別權限", [permissions[n] for n in schedule_df.index])
+            schedule_df.insert(0, "班別權限", [permissions.get(n, "DEN") for n in schedule_df.index])
 
             manpower_rows = []
             for d in range(num_days):
