@@ -16,7 +16,7 @@ st.set_page_config(
 
 st.title("🏥 2F護理排班系統 (記憶鎖定完全體)")
 
-# 🎯 初始化 Streamlit 記憶體狀態（防止下載或重新整理時檔案與結果噴掉）
+# 初始化 Streamlit 永久記憶體狀態
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
 if "schedule_result" not in st.session_state:
@@ -24,9 +24,9 @@ if "schedule_result" not in st.session_state:
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# 核心 14 人名單
+# 🎯【繁簡體校正】將 "陈慧屏" 修正為正體中文 "陳慧屏"
 CORE_STAFF_NAMES = [
-    "郭珍君", "李雅慧", "蔡靜如", "陈慧屏", "劉榆琳", 
+    "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
     "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
     "汪家容", "林欣儀", "林怡微", "陳威宇"
 ]
@@ -42,7 +42,7 @@ DEFAULT_PERMISSIONS = {
     "林怡微": "DEN", "陳威宇": "DEN"
 }
 
-# 上月最後班安全底牌（當 Excel 軌道對不上時，以此做為下拉選單的聰明預設，100%防空防錯）
+# 上月最後班安全底牌
 DEFAULT_LAST_SHIFTS = {
     "郭珍君": "off", "劉榆琳": "N", "陳義樺": "N", "李雅慧": "D", 
     "蔡靜如": "D", "陳慧屏": "D", "黃家靜": "D", "許雅雯": "D", 
@@ -118,8 +118,7 @@ def load_request_and_permissions(upload_file, names, num_days):
 # 基本班表歷史狀態精準讀取器 (file_a)
 # =====================================
 def load_history_only(upload_file, names):
-    history_shift = {n: "D" for n in names} # 預設底牌
-    # 替特定人員覆蓋安全常規預設
+    history_shift = {n: "D" for n in names} 
     for n in names:
         if n in DEFAULT_LAST_SHIFTS:
             history_shift[n] = DEFAULT_LAST_SHIFTS[n]
@@ -177,7 +176,6 @@ def load_history_only(upload_file, names):
                         break
                 history_streak[target_nurse] = streak
     except:
-        # 如果上傳的舊班表格式嚴重錯亂，直接觸發安全氣囊，採用內建大腦常規預設，絕對不報錯
         pass
         
     return history_shift, history_streak
@@ -384,7 +382,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             end = min(start + 7, num_days)
             week = schedule[nurse][start:end]
             has_rest = any(x in ["off", "R"] for x in week)
-            if not has_rest and (end - 1) < num_days:
+            if not has_rest && (end - 1) < num_days:
                 if (end - 1) < len(requests[nurse]) and requests[nurse][end - 1] not in ["M", "R"]:
                     schedule[nurse][end - 1] = "off"
 
@@ -416,7 +414,6 @@ with st.sidebar:
     start_date = st.date_input("開始日期", datetime.date.today().replace(day=1))
     end_date = st.date_input("結束日期", datetime.date.today())
     st.markdown("---")
-    # 🎯 雙上傳欄位完美保留
     file_a = st.file_uploader("上傳【基本班表（上月舊班表）】", type=["xlsx"])
     file_b = st.file_uploader("上傳當月【預排休表】", type=["xlsx"])
 
@@ -424,15 +421,11 @@ with st.sidebar:
 # 主程式邏輯區
 # =====================================
 
-# 只有當預排休表上傳後才啟動主畫面（基本班表為自由選填，不上傳也不會當機）
 if file_b:
     try:
         num_days = (end_date - start_date).days + 1
         
-        # 1. 讀取當月預排假與權限
         requests, extracted_permissions = load_request_and_permissions(file_b, CORE_STAFF_NAMES, num_days)
-        
-        # 2. 智慧讀取上月班表（具備防錯氣囊，若未上傳 file_a 則直接套用常規大腦預設）
         history_shift, history_streak = load_history_only(file_a, CORE_STAFF_NAMES)
         names = CORE_STAFF_NAMES
 
@@ -459,7 +452,7 @@ if file_b:
         
         with col1:
             st.subheader("👥 1. 人員初始狀態確認")
-            st.caption("💡 系統已為您自動載入對齊結果。若與上月最後一天不符，您隨時可以用選單手動修正！")
+            st.caption("💡 系統已自動載入對齊結果。若與上月最後一天不符，您隨時可以用選單手動修正！")
             config_rows = []
             for nurse in names:
                 config_rows.append({
@@ -470,7 +463,6 @@ if file_b:
                 })
             base_config_df = pd.DataFrame(config_rows)
             
-            # 高相容度網頁即時修改選單
             config_df = st.data_editor(
                 base_config_df, 
                 use_container_width=True, 
@@ -597,32 +589,4 @@ if file_b:
                 st.dataframe(holiday_df, use_container_width=True)
 
             with tabs[3]:
-                st.dataframe(night_df, use_container_width=True)
-
-            with tabs[4]:
-                if len(issues) == 0:
-                    st.success("🎉 太棒了！14位護理同仁權限與假別完全精準抓取，排班完美達標！")
-                else:
-                    issue_df = pd.DataFrame(issues, columns=["姓名", "異常說明"])
-                    st.dataframe(issue_df, use_container_width=True)
-
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                schedule_df.to_excel(writer, sheet_name="班表")
-                manpower_df.to_excel(writer, sheet_name="每日實際人力", index=False)
-                holiday_df.to_excel(writer, sheet_name="休假統計", index=False)
-                night_df.to_excel(writer, sheet_name="夜班統計", index=False)
-                
-            st.markdown("---")
-            st.download_button(
-                label="📥 下載 14人最終精準權限版 Excel",
-                data=output.getvalue(),
-                file_name=f"2F護理排班結果_{start_date.strftime('%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-
-    except Exception as e:
-        st.error(f"系統執行時發生錯誤：{str(e)}")
-else:
-    st.info("💡 請上傳當月【預排休表】（基本班表可選填上傳）以啟動系統。")
+                st.dataframe(night_df, use
