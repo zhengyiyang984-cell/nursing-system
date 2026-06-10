@@ -24,7 +24,7 @@ if "schedule_result" not in st.session_state:
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# 核心 14 人名單 (後台一律用最乾淨的文字進行索引)
+# 核心 14 人名單
 CORE_STAFF_NAMES = [
     "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
     "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
@@ -43,7 +43,7 @@ DEFAULT_PERMISSIONS = {
 }
 
 # =====================================
-# 預排休表智慧雙挖取器 (強化去空格機制)
+# 預排休表智慧雙挖取器
 # =====================================
 def load_request_and_permissions(upload_file, names, num_days):
     requests_dict = {n: [""] * num_days for n in names}
@@ -70,7 +70,6 @@ def load_request_and_permissions(upload_file, names, num_days):
     df = df.iloc[header_row_idx + 1 :].reset_index(drop=True)
     
     for _, row in df.iterrows():
-        # 強制將 Excel 的姓名去除所有中英文空格
         raw_name = str(row.iloc[name_col_idx]).replace(" ", "").replace(" ", "").strip()
         
         target_nurse = None
@@ -81,14 +80,12 @@ def load_request_and_permissions(upload_file, names, num_days):
         if not target_nurse:
             continue
             
-        # 精準挖取 D 欄 的權限
         permission_col_idx = name_col_idx + 2
         if permission_col_idx < len(df.columns):
             perm_val = str(row.iloc[permission_col_idx]).upper().strip()
             if perm_val in ["D", "E", "N", "DE", "DN", "EN", "DEN"]:
                 permissions_dict[target_nurse] = perm_val
 
-        # 精準對齊 E 欄開始的預排假別
         start_data_col = name_col_idx + 3
                 
         for d in range(num_days):
@@ -355,7 +352,20 @@ def can_work_shift(permission, shift):
     return shift in permission
 
 # =====================================
-# 主程式
+# 側邊欄與主要畫面宣告 (🎯 核心對齊修正處)
+# =====================================
+
+with st.sidebar:
+    st.header("📅 日期與檔案設定")
+    start_date = st.date_input("開始日期", datetime.date.today().replace(day=1))
+    end_date = st.date_input("結束日期", datetime.date.today())
+    st.markdown("---")
+    # 🎯 保證最頂層的變數名稱就是 file_a 與 file_b，且絕對不被包在任何 if 內
+    file_a = st.file_uploader("基本班表", type=["xlsx"])
+    file_b = st.file_uploader("預排休表", type=["xlsx"])
+
+# =====================================
+# 主程式邏輯區
 # =====================================
 
 if file_a and file_b:
@@ -397,7 +407,6 @@ if file_a and file_b:
                     "上月最後班": history_shift[nurse],
                     "已連上天數": history_streak[nurse]
                 })
-            # 將基礎表格資料包裝
             base_config_df = pd.DataFrame(config_rows)
             config_df = st.data_editor(base_config_df, use_container_width=True, num_rows="fixed")
 
@@ -413,7 +422,6 @@ if file_a and file_b:
                 "N_min": int(row["大夜最低(N)"])
             })
 
-        # 🎯【核心精準修正】雙向清洗：不依賴 row 內部的內嵌 Key，直接將欄位值強制轉換、徹底拔除空格
         permissions = {}
         history_shift_final = {}
         history_streak_final = {}
@@ -441,7 +449,6 @@ if file_a and file_b:
         if st.session_state["run_success"]:
             result = st.session_state["schedule_result"]
 
-            # 生成大報表
             schedule_df = pd.DataFrame(result).T
             schedule_df.columns = date_headers
             schedule_df.insert(0, "班別權限", [permissions.get(n, "DEN") for n in schedule_df.index])
@@ -497,7 +504,6 @@ if file_a and file_b:
                     if any(x in ["E", "N"] for x in result[nurse]):
                         issues.append([nurse, "兼職人員排班錯誤：出現非白班(E/N班)"])
 
-            # 畫面分頁
             tabs = st.tabs(["📅 最終班表", "📊 每日實際人力", "🏖️ 休假統計", "🌙 夜班統計", "🔍 規則檢查"])
 
             with tabs[0]:
@@ -519,7 +525,6 @@ if file_a and file_b:
                     issue_df = pd.DataFrame(issues, columns=["姓名", "異常說明"])
                     st.dataframe(issue_df, use_container_width=True)
 
-            # Excel 下載
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 schedule_df.to_excel(writer, sheet_name="班表")
