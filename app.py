@@ -10,11 +10,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (精準權限版)",
+    page_title="2F護理排班系統 (記憶體穩定版)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (精準權限版)")
+st.title("🏥 2F護理排班系統 (記憶體穩定版)")
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
@@ -28,7 +28,7 @@ CORE_STAFF_NAMES = [
 # 兼職人員名單
 PART_TIME_STAFFS = ["郭珍君"] 
 
-# 備用安全底牌（如果 Excel 真的不小心留白才使用）
+# 備用安全底牌
 DEFAULT_PERMISSIONS = {
     "郭珍君": "D", "劉榆琳": "N", "陳義樺": "N", "李雅慧": "DEN", 
     "蔡靜如": "DEN", "陳慧屏": "DEN", "黃家靜": "DEN", "許雅雯": "DEN", 
@@ -40,10 +40,6 @@ DEFAULT_PERMISSIONS = {
 # 預排休表智慧雙挖取器
 # =====================================
 def load_request_and_permissions(upload_file, names, num_days):
-    """
-    依據 2F 預排休標準格式：
-    B欄(姓名) -> C欄(職稱) -> D欄(權限) -> E欄(1號)
-    """
     requests_dict = {n: [""] * num_days for n in names}
     permissions_dict = {n: DEFAULT_PERMISSIONS.get(n, "DEN") for n in names}
     
@@ -52,7 +48,7 @@ def load_request_and_permissions(upload_file, names, num_days):
     df = pd.read_excel(upload_file, sheet_name=sheet_name, header=None)
     
     header_row_idx = 0
-    name_col_idx = 1 # 預設 B 欄是第 1 欄
+    name_col_idx = 1
     
     for idx, row in df.iterrows():
         row_str = [str(x) for x in row.values]
@@ -77,14 +73,12 @@ def load_request_and_permissions(upload_file, names, num_days):
         if not target_nurse:
             continue
             
-        # 精準挖取 D 欄 (姓名右邊第 2 欄) 的權限
         permission_col_idx = name_col_idx + 2
         if permission_col_idx < len(df.columns):
             perm_val = str(row.iloc[permission_col_idx]).upper().strip()
             if perm_val in ["D", "E", "N", "DE", "DN", "EN", "DEN"]:
                 permissions_dict[target_nurse] = perm_val
 
-        # 精準對齊 E 欄 (姓名右邊第 3 欄) 開始的 1號~30號 假別
         start_data_col = name_col_idx + 3
                 
         for d in range(num_days):
@@ -146,14 +140,13 @@ def load_history_only(upload_file, names):
     return history_shift, history_streak
 
 # =====================================
-# 智慧排班引擎（滿載調度限制）
+# 智慧排班引擎
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
     night_count = {n: 0 for n in names}
     work_count = {n: 0 for n in names}
 
-    # STEP 1: 固定預排開會或特定指定班
     for nurse in names:
         for d in range(num_days):
             if requests[nurse][d] in ["M", "D", "E", "N"]:
@@ -163,7 +156,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                     if requests[nurse][d] in ["E", "N"]:
                         night_count[nurse] += 1
 
-    # STEP 2: 大夜班 (N) 分配 —— 滿載優先
     for day in range(num_days):
         req_n_min = manpower_req[day]["N_min"]
         current_n = sum(1 for n in names if schedule[n][day] == "N")
@@ -193,7 +185,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 3: 小夜班 (E) 分配 —— 滿載優先
     for day in range(num_days):
         req_e_min = manpower_req[day]["E_min"]
         current_e = sum(1 for n in names if schedule[n][day] == "E")
@@ -227,7 +218,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 4: 白班 (D) 分配 —— 全職填補
     for day in range(num_days):
         req_d_min = manpower_req[day]["D_min"]
         current_d = sum(1 for n in names if schedule[n][day] == "D")
@@ -264,7 +254,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             schedule[nurse][day] = "D"
             work_count[nurse] += 1
 
-    # STEP 5: 半職郭珍君 精密智慧補洞 (固定最多10天)
     for nurse in PART_TIME_STAFFS:
         if nurse in names:
             allocated_days = 0
@@ -291,7 +280,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 for d in blank_days[:10 - allocated_days]:
                     schedule[nurse][d] = "D"
 
-    # STEP 6: 剩餘空格全部補 off
     for nurse in names:
         for d in range(num_days):
             if schedule[nurse][d] == "":
@@ -300,7 +288,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 else:
                     schedule[nurse][d] = "off"
 
-    # STEP 7: 法定休假天數多退少補
     for nurse in names:
         if nurse in PART_TIME_STAFFS:
             continue
@@ -314,7 +301,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                     schedule[nurse][d] = "off"
                     need -= 1
 
-    # STEP 8: 每週一休與連 5 防呆
     for nurse in names:
         for start in range(0, num_days, 7):
             end = min(start + 7, num_days)
@@ -346,12 +332,8 @@ if file_a and file_b:
     try:
         num_days = (end_date - start_date).days + 1
         
-        # 1. 執行精準挖取機制
         requests, extracted_permissions = load_request_and_permissions(file_b, CORE_STAFF_NAMES, num_days)
-        
-        # 2. 歷史紀錄載入
         history_shift, history_streak = load_history_only(file_a, CORE_STAFF_NAMES)
-        
         names = CORE_STAFF_NAMES
 
         date_headers = []
@@ -377,7 +359,6 @@ if file_a and file_b:
         
         with col1:
             st.subheader("👥 1. 人員初始狀態確認")
-            st.caption("✅ 權限欄位已依據 Excel 絕對座標，100% 精準從 D 欄撈取！")
             config_rows = []
             for nurse in names:
                 config_rows.append({
@@ -411,13 +392,22 @@ if file_a and file_b:
 
         st.markdown("---")
         
+        # 🔔 點擊按鈕時，進行排班並將結果存入 st.session_state
         if st.button("🚀 依照自訂每日人力啟動自動排班", type="primary", use_container_width=True):
-            with st.spinner("讀取預排表精準權限並計算中..."):
-                result = generate_schedule(
+            with st.spinner("優化班表計算中..."):
+                # 將計算結果封裝存入記憶體
+                st.session_state["schedule_result"] = generate_schedule(
                     names, permissions, requests, num_days,
                     manpower_req_list, history_shift_final, history_streak_final
                 )
+                st.session_state["run_success"] = True
+
+        # =====================================
+        # 核心記憶體渲染機制：只要排班成功過，就持續顯示結果
+        # =====================================
+        if st.session_state.get("run_success", False):
             st.success("🎉 14人動態精準權限班表計算完成！")
+            result = st.session_state["schedule_result"]
 
             tabs = st.tabs(["📅 最終班表", "📊 每日實際人力", "🏖️ 休假統計", "🌙 夜班統計", "🔍 規則檢查"])
 
@@ -491,9 +481,7 @@ if file_a and file_b:
                     issue_df = pd.DataFrame(issues, columns=["姓名", "異常說明"])
                     st.dataframe(issue_df, use_container_width=True)
 
-            # =====================================
-            # 【關鍵修復】將 Excel 下載按鈕安全縮排在按鈕事件內！
-            # =====================================
+            # 記憶體內的 Excel 生成與下載按決定
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 schedule_df.to_excel(writer, sheet_name="班表")
@@ -503,9 +491,9 @@ if file_a and file_b:
                 
             st.markdown("---")
             st.download_button(
-                label="📥 下載 14人精準對齊版 Excel",
+                label="📥 下載 14人最終精準權限版 Excel",
                 data=output.getvalue(),
-                file_name=f"2F護理排班結果_{start_date.strftime('%m%d')}.xlsx",
+                file_name=f"2F護理排班結果_穩定版_{start_date.strftime('%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
