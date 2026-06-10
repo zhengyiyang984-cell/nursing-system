@@ -43,7 +43,7 @@ DEFAULT_PERMISSIONS = {
 }
 
 # =====================================
-# 預排休表智慧雙挖取器
+# 預排休表智慧雙挖取器 (強化去空格機制)
 # =====================================
 def load_request_and_permissions(upload_file, names, num_days):
     requests_dict = {n: [""] * num_days for n in names}
@@ -70,6 +70,7 @@ def load_request_and_permissions(upload_file, names, num_days):
     df = df.iloc[header_row_idx + 1 :].reset_index(drop=True)
     
     for _, row in df.iterrows():
+        # 強制將 Excel 的姓名去除所有中英文空格
         raw_name = str(row.iloc[name_col_idx]).replace(" ", "").replace(" ", "").strip()
         
         target_nurse = None
@@ -80,12 +81,14 @@ def load_request_and_permissions(upload_file, names, num_days):
         if not target_nurse:
             continue
             
+        # 精準挖取 D 欄 的權限
         permission_col_idx = name_col_idx + 2
         if permission_col_idx < len(df.columns):
             perm_val = str(row.iloc[permission_col_idx]).upper().strip()
             if perm_val in ["D", "E", "N", "DE", "DN", "EN", "DEN"]:
                 permissions_dict[target_nurse] = perm_val
 
+        # 精準對齊 E 欄開始的預排假別
         start_data_col = name_col_idx + 3
                 
         for d in range(num_days):
@@ -147,7 +150,7 @@ def load_history_only(upload_file, names):
     return history_shift, history_streak
 
 # =====================================
-# 智慧排班引擎 (雜訊全清空完美版)
+# 智慧排班引擎
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
@@ -199,7 +202,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 3: 小夜班 (E) 分配 —— 滿載優先
+    # STEP 3: 小夜班 (E) 分配
     for day in range(num_days):
         req_e_min = manpower_req[day]["E_min"]
         current_e = sum(1 for n in names if schedule[n][day] == "E")
@@ -221,7 +224,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
 
         if len(candidates) < need_e:
             for nurse in names:
-                # 🎯【精準修復】徹底移除了第 215 行多寫的 Glen 雜訊
                 if nurse not in PART_TIME_STAFFS and schedule[nurse][day] == "" and can_work_shift(permissions[nurse], "E"):
                     if nurse not in candidates:
                         candidates.append(nurse)
@@ -234,7 +236,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 4: 白班 (D) 分配 —— 全職填補
+    # STEP 4: 白班 (D) 分配
     for day in range(num_days):
         req_d_min = manpower_req[day]["D_min"]
         current_d = sum(1 for n in names if schedule[n][day] == "D")
@@ -409,13 +411,14 @@ if file_a and file_b:
                 "N_min": int(row["大夜最低(N)"])
             })
 
+        # 🎯【關鍵修正】在解析前端互動表格時，強制對姓名進行全面去空格
         permissions = {}
         history_shift_final = {}
         history_streak_final = {}
         for _, row in config_df.iterrows():
-            nurse = row["姓名"]
-            permissions[nurse] = str(row["權限"]).upper()
-            history_shift_final[nurse] = str(row["上月最後班"])
+            nurse = str(row["姓名"]).replace(" ", "").replace(" ", "").strip()
+            permissions[nurse] = str(row["權限"]).upper().strip()
+            history_shift_final[nurse] = str(row["上月最後班"]).strip()
             history_streak_final[nurse] = int(row["已連上天數"])
 
         st.markdown("---")
@@ -431,7 +434,7 @@ if file_a and file_b:
         if st.session_state["run_success"]:
             result = st.session_state["schedule_result"]
 
-            # 確實生成四大報表
+            # 生成大報表 (這裡的索引 n 都會完美配對去空格後的乾淨名字)
             schedule_df = pd.DataFrame(result).T
             schedule_df.columns = date_headers
             schedule_df.insert(0, "班別權限", [permissions[n] for n in schedule_df.index])
