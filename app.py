@@ -10,11 +10,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (極致穩定版)",
+    page_title="2F護理排班系統 (半職積班優化版)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (極致穩定版)")
+st.title("🏥 2F護理排班系統 (半職積班優化版)")
 
 # 初始化 Streamlit 永久記憶體狀態
 if "run_success" not in st.session_state:
@@ -51,7 +51,7 @@ DEFAULT_LAST_SHIFTS = {
 }
 
 # =====================================
-# 預排休表智慧雙挖取器 (file_b)
+# 預排休表智慧雙挖取器
 # =====================================
 def load_request_and_permissions(upload_file, names, num_days):
     requests_dict = {n: [""] * num_days for n in names}
@@ -115,7 +115,7 @@ def load_request_and_permissions(upload_file, names, num_days):
     return requests_dict, permissions_dict
 
 # =====================================
-# 基本班表歷史狀態精準讀取器 (file_a)
+# 基本班表歷史狀態精準讀取器
 # =====================================
 def load_history_only(upload_file, names):
     history_shift = {n: "D" for n in names} 
@@ -181,7 +181,7 @@ def load_history_only(upload_file, names):
     return history_shift, history_streak
 
 # =====================================
-# 智慧排班引擎
+# 智慧排班引擎 (含半職郭珍君連續積班優化)
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
@@ -249,7 +249,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             if not can_work_shift(permissions[nurse], "E"):
                 continue
             if day > 0 and day - 1 < len(schedule[nurse]) and schedule[nurse][day - 1] == "N":
-                continue
+                break
             candidates.append(nurse)
 
         if len(candidates) < need_e:
@@ -322,33 +322,72 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 schedule[nurse][day] = "D"
                 work_count[nurse] += 1
 
-    # STEP 5: 半職郭珍君智慧補洞
+    # 🎯 STEP 5: 半職郭珍君智慧區塊連續積班優化 (限制每區塊 2-3 天，杜絕單打獨鬥 1 天班)
     for nurse in PART_TIME_STAFFS:
         if nurse in names:
-            allocated_days = 0
-            for loop in range(10): 
-                shortage_days = []
-                for d in range(num_days):
-                    is_meeting = (d < len(requests[nurse]) and requests[nurse][d] == "M")
-                    if schedule[nurse][d] == "" and not is_meeting:
+            pt_total_target = 10
+            pt_current_count = 0
+            
+            # 第一波：尋找最嚴重的「連續人力短缺缺口」，以 2-3 天為一組進行智慧塞班
+            for block_len in [3, 2]:
+                if pt_current_count >= pt_total_target:
+                    break
+                    
+                for start_d in range(num_days - block_len + 1):
+                    if pt_current_count + block_len > pt_total_target:
+                        continue
+                        
+                    # 檢查這段連續天數內，她自己是不是都是空的、且有沒有被開會M卡死
+                    can_allocate_block = True
+                    block_shortage_score = 0
+                    
+                    for d_offset in range(block_len):
+                        d = start_date_idx = start_d + d_offset
+                        is_meeting = (d < len(requests[nurse]) and requests[nurse][d] == "M")
+                        
+                        if schedule[nurse][d] != "" or is_meeting:
+                            can_allocate_block = False
+                            break
+                        
+                        # 計算這幾天白班的缺人總量 (實際人數 - 需求人數)
                         current_d_count = sum(1 for n in names if schedule[n][d] == "D")
                         shortage = current_d_count - manpower_req[d]["D_min"]
                         if shortage < 0:
-                            shortage_days.append((d, shortage))
-                
-                if not shortage_days:
-                    break
-                
-                shortage_days.sort(key=lambda x: x[1]) 
-                target_day = shortage_days[0][0]
-                schedule[nurse][target_day] = "D"
-                allocated_days += 1
-
-            if allocated_days < 10:
-                blank_days = [d for d in range(num_days) if schedule[nurse][d] == "" and not (d < len(requests[nurse]) and requests[nurse][d] == "M")]
-                random.shuffle(blank_days)
-                for d in blank_days[:10 - allocated_days]:
-                    schedule[nurse][d] = "D"
+                            block_shortage_score += abs(shortage)
+                            
+                    # 如果這段區塊很安全，且確實嚴重缺人，直接將這 2~3 天全部填滿白班
+                    if can_allocate_block and block_shortage_score > 0:
+                        for d_offset in range(block_len):
+                            d = start_d + d_offset
+                            schedule[nurse][d] = "D"
+                        pt_current_count += block_len
+                        
+            # 第二波：如果第一波算完還沒滿 10 天，啟用「緊鄰合併防孤立條款」
+            if pt_current_count < pt_total_target:
+                for d in range(num_days):
+                    if pt_current_count >= pt_total_target:
+                        break
+                    if schedule[nurse][d] == "" and not (d < len(requests[nurse]) and requests[nurse][d] == "M"):
+                        # 核心防呆判定：只有當左邊或右邊「已經有安排D班」時才允許填入，以此維持 2-3 天的連續性！
+                        has_left_neighbor = (d > 0 and schedule[nurse][d - 1] == "D")
+                        has_right_neighbor = (d < num_days - 1 and schedule[nurse][d + 1] == "D")
+                        
+                        if has_left_neighbor or has_right_neighbor:
+                            schedule[nurse][d] = "D"
+                            pt_current_count += 1
+                            
+            # 第三波：安全備用氣囊（如果前兩波還是填不滿，代表天數極短，強制抓一個空的 2 天連續區塊塞滿）
+            if pt_current_count < pt_total_target:
+                for start_d in range(num_days - 1):
+                    if pt_current_count >= pt_total_target:
+                        break
+                    if schedule[nurse][start_d] == "" and schedule[nurse][start_d + 1] == "":
+                        is_m1 = (start_d < len(requests[nurse]) and requests[nurse][start_d] == "M")
+                        is_m2 = (start_d + 1 < len(requests[nurse]) and requests[nurse][start_d + 1] == "M")
+                        if not is_m1 and not is_m2:
+                            schedule[nurse][start_d] = "D"
+                            schedule[nurse][start_d + 1] = "D"
+                            pt_current_count += 2
 
     # STEP 6: 剩餘空格全部補 off
     for nurse in names:
@@ -382,7 +421,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             end = min(start + 7, num_days)
             week = schedule[nurse][start:end]
             has_rest = any(x in ["off", "R"] for x in week)
-            # 🎯【精準修復】將這裡的手誤 && 改回 Python 的標準 and 語法
             if not has_rest and (end - 1) < num_days:
                 if (end - 1) < len(requests[nurse]) and requests[nurse][end - 1] not in ["M", "R"]:
                     schedule[nurse][end - 1] = "off"
