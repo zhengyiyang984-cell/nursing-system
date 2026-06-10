@@ -10,11 +10,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統",
+    page_title="2F護理排班系統 (選單優化完全體)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統")
+st.title("🏥 2F護理排班系統 (選單優化完全體)")
 
 # 初始化 Streamlit 永久記憶體狀態
 if "run_success" not in st.session_state:
@@ -162,7 +162,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 if requests[nurse][d] in ["E", "N"]:
                     night_count[nurse] += 1
 
-    # STEP 2: 大夜班 (N) 分配 —— 滿載優先
+    # STEP 2: 大夜班 (N) 分配
     for day in range(num_days):
         req_n_min = manpower_req[day]["N_min"]
         current_n = sum(1 for n in names if schedule[n][day] == "N")
@@ -198,7 +198,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 3: 小夜班 (E) 分配 —— 滿載優先
+    # STEP 3: 小夜班 (E) 分配
     for day in range(num_days):
         req_e_min = manpower_req[day]["E_min"]
         current_e = sum(1 for n in names if schedule[n][day] == "E")
@@ -232,7 +232,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 4: 白班 (D) 分配 —— 雙重救火
+    # STEP 4: 白班 (D) 分配
     for day in range(num_days):
         req_d_min = manpower_req[day]["D_min"]
         current_d = sum(1 for n in names if schedule[n][day] == "D")
@@ -263,7 +263,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             schedule[nurse][day] = "D"
             work_count[nurse] += 1
 
-        # 第二輪強力救火
+        # 第二輪救火
         current_d = sum(1 for n in names if schedule[n][day] == "D")
         need_d = req_d_min - current_d
         if need_d > 0:
@@ -428,20 +428,20 @@ if file_a and file_b:
                 })
             base_config_df = pd.DataFrame(config_rows)
             
-            # 🎯【核心升級：將權限與上月最後班強制綁定為「下拉選單」設定】
+            # 🎯【相容性修正】將 SelectColumn 替換成萬用相容的 SelectboxColumn 元件
             config_df = st.data_editor(
                 base_config_df, 
                 use_container_width=True, 
                 num_rows="fixed",
                 column_config={
-                    "姓名": st.column_config.TextColumn("姓名", disabled=True), # 姓名防呆鎖死
-                    "權限": st.column_config.SelectColumn(
+                    "姓名": st.column_config.TextColumn("姓名", disabled=True), 
+                    "權限": st.column_config.SelectboxColumn(
                         "權限",
                         help="設定同仁當月可排班別範疇",
                         options=["DEN", "DE", "DN", "EN", "D", "E", "N"],
                         required=True
                     ),
-                    "上月最後班": st.column_config.SelectColumn(
+                    "上月最後班": st.column_config.SelectboxColumn(
                         "上月最後班",
                         help="跨月排班安全防呆依據",
                         options=["D", "E", "N", "off", "R", "M"],
@@ -463,7 +463,6 @@ if file_a and file_b:
                 "N_min": int(row["大夜最低(N)"])
             })
 
-        # 雙向清洗
         permissions = {}
         history_shift_final = {}
         history_streak_final = {}
@@ -542,7 +541,7 @@ if file_a and file_b:
                 if nurse in PART_TIME_STAFFS:
                     d_count = sum(1 for x in result[nurse] if x == "D")
                     if d_count > 10:
-                        issues.append([nurse, f"兼兼職人員排班限制：白班超過 10 天 ({d_count}天)"])
+                        issues.append([nurse, f"兼職人員排班限制：白班超過 10 天 ({d_count}天)"])
                     if any(x in ["E", "N"] for x in result[nurse]):
                         issues.append([nurse, "兼職人員排班錯誤：出現非白班(E/N班)"])
 
