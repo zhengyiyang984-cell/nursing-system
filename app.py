@@ -10,11 +10,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 ",
+    page_title="2F護理排班系統 (精準權限版)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 ")
+st.title("🏥 2F護理排班系統 (精準權限版)")
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
@@ -37,7 +37,7 @@ DEFAULT_PERMISSIONS = {
 }
 
 # =====================================
-# 【絕對座標優化】預排休表智慧雙挖取器
+# 預排休表智慧雙挖取器
 # =====================================
 def load_request_and_permissions(upload_file, names, num_days):
     """
@@ -52,9 +52,8 @@ def load_request_and_permissions(upload_file, names, num_days):
     df = pd.read_excel(upload_file, sheet_name=sheet_name, header=None)
     
     header_row_idx = 0
-    name_col_idx = 1 # 預設 B 欄是第 1 欄 (0是A, 1是B)
+    name_col_idx = 1 # 預設 B 欄是第 1 欄
     
-    # 尋找包含「姓名」的表頭行
     for idx, row in df.iterrows():
         row_str = [str(x) for x in row.values]
         if any("姓名" in s or "人員" in s for s in row_str):
@@ -65,7 +64,6 @@ def load_request_and_permissions(upload_file, names, num_days):
                     break
             break
 
-    # 重新整理 DataFrame 的欄位名稱
     df.columns = df.iloc[header_row_idx]
     df = df.iloc[header_row_idx + 1 :].reset_index(drop=True)
     
@@ -79,15 +77,14 @@ def load_request_and_permissions(upload_file, names, num_days):
         if not target_nurse:
             continue
             
-        # --- 🎯 【絕對座標定位 1】精準挖取 D 欄 (姓名右邊第 2 欄) 的權限 ---
+        # 精準挖取 D 欄 (姓名右邊第 2 欄) 的權限
         permission_col_idx = name_col_idx + 2
         if permission_col_idx < len(df.columns):
             perm_val = str(row.iloc[permission_col_idx]).upper().strip()
-            # 只要格子裡寫的是合理的權限代號，直接強行採納覆蓋！
             if perm_val in ["D", "E", "N", "DE", "DN", "EN", "DEN"]:
                 permissions_dict[target_nurse] = perm_val
 
-        # --- 🎯 【絕對座標定位 2】精準對齊 E 欄 (姓名右邊第 3 欄) 開始的 1號~30號 假別 ---
+        # 精準對齊 E 欄 (姓名右邊第 3 欄) 開始的 1號~30號 假別
         start_data_col = name_col_idx + 3
                 
         for d in range(num_days):
@@ -99,7 +96,6 @@ def load_request_and_permissions(upload_file, names, num_days):
                 continue
             cell_value_upper = cell_value.upper()
             
-            # 填寫規範比對
             if cell_value_upper in ["R", "D", "E", "N"]:
                 requests_dict[target_nurse][d] = cell_value_upper
             elif "開會" in cell_value or cell_value_upper == "M":
@@ -110,7 +106,7 @@ def load_request_and_permissions(upload_file, names, num_days):
     return requests_dict, permissions_dict
 
 # =====================================
-# 歷史狀態載入（僅抓上月最後班與連上天數）
+# 歷史狀態載入
 # =====================================
 def load_history_only(upload_file, names):
     history_shift = {n: "off" for n in names}
@@ -350,7 +346,7 @@ if file_a and file_b:
     try:
         num_days = (end_date - start_date).days + 1
         
-        # 1. 執行絕對座標挖取機制
+        # 1. 執行精準挖取機制
         requests, extracted_permissions = load_request_and_permissions(file_b, CORE_STAFF_NAMES, num_days)
         
         # 2. 歷史紀錄載入
@@ -370,11 +366,11 @@ if file_a and file_b:
             
             if curr.weekday() in [5, 6]:
                 manpower_setup_rows.append({
-                    "開設日期": full_header, "白班最低(D)": 3, "小夜最低(E)": 2, "大夜最低(N)": 2
+                    "日期": full_header, "白班最低(D)": 3, "小夜最低(E)": 2, "大夜最低(N)": 2
                 })
             else:
                 manpower_setup_rows.append({
-                    "開設日期": full_header, "白班最低(D)": 4, "小夜最低(E)": 3, "大夜最低(N)": 2
+                    "日期": full_header, "白班最低(D)": 4, "小夜最低(E)": 3, "大夜最低(N)": 2
                 })
 
         col1, col2 = st.columns([1, 1.2])
@@ -495,16 +491,21 @@ if file_a and file_b:
                     issue_df = pd.DataFrame(issues, columns=["姓名", "異常說明"])
                     st.dataframe(issue_df, use_container_width=True)
 
+            # =====================================
+            # 【關鍵修復】將 Excel 下載按鈕安全縮排在按鈕事件內！
+            # =====================================
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 schedule_df.to_excel(writer, sheet_name="班表")
                 manpower_df.to_excel(writer, sheet_name="每日實際人力", index=False)
                 holiday_df.to_excel(writer, sheet_name="休假統計", index=False)
                 night_df.to_excel(writer, sheet_name="夜班統計", index=False)
+                
+            st.markdown("---")
             st.download_button(
                 label="📥 下載 14人精準對齊版 Excel",
                 data=output.getvalue(),
-                file_name=f"2F護理排班結果_座標精準版_{start_date.strftime('%m%d')}.xlsx",
+                file_name=f"2F護理排班結果_{start_date.strftime('%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
