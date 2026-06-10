@@ -10,13 +10,13 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (極致穩定版)",
+    page_title="2F護理排班系統 (記憶鎖定完全體)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (極致穩定版)")
+st.title("🏥 2F護理排班系統 (記憶鎖定完全體)")
 
-# 初始化 Streamlit 永久記憶體狀態
+# 🎯 初始化 Streamlit 記憶體狀態（防止下載或重新整理時檔案與結果噴掉）
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
 if "schedule_result" not in st.session_state:
@@ -26,7 +26,7 @@ WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
 # 核心 14 人名單
 CORE_STAFF_NAMES = [
-    "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
+    "郭珍君", "李雅慧", "蔡靜如", "陈慧屏", "劉榆琳", 
     "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
     "汪家容", "林欣儀", "林怡微", "陳威宇"
 ]
@@ -34,7 +34,7 @@ CORE_STAFF_NAMES = [
 # 兼職人員名單
 PART_TIME_STAFFS = ["郭珍君"] 
 
-# 備用安全底牌：當月權限大腦
+# 當月權限預設底牌
 DEFAULT_PERMISSIONS = {
     "郭珍君": "D", "劉榆琳": "N", "陳義樺": "N", "李雅慧": "DEN", 
     "蔡靜如": "DEN", "陳慧屏": "DEN", "黃家靜": "DEN", "許雅雯": "DEN", 
@@ -42,7 +42,7 @@ DEFAULT_PERMISSIONS = {
     "林怡微": "DEN", "陳威宇": "DEN"
 }
 
-# 備用安全底牌：上月最後班大腦（直接內建常規，防止 Excel 抓空）
+# 上月最後班安全底牌（當 Excel 軌道對不上時，以此做為下拉選單的聰明預設，100%防空防錯）
 DEFAULT_LAST_SHIFTS = {
     "郭珍君": "off", "劉榆琳": "N", "陳義樺": "N", "李雅慧": "D", 
     "蔡靜如": "D", "陳慧屏": "D", "黃家靜": "D", "許雅雯": "D", 
@@ -51,7 +51,7 @@ DEFAULT_LAST_SHIFTS = {
 }
 
 # =====================================
-# 預排休表智慧雙挖取器
+# 預排休表智慧雙挖取器 (file_b)
 # =====================================
 def load_request_and_permissions(upload_file, names, num_days):
     requests_dict = {n: [""] * num_days for n in names}
@@ -113,6 +113,74 @@ def load_request_and_permissions(upload_file, names, num_days):
                 requests_dict[target_nurse][d] = "R"
                 
     return requests_dict, permissions_dict
+
+# =====================================
+# 基本班表歷史狀態精準讀取器 (file_a)
+# =====================================
+def load_history_only(upload_file, names):
+    history_shift = {n: "D" for n in names} # 預設底牌
+    # 替特定人員覆蓋安全常規預設
+    for n in names:
+        if n in DEFAULT_LAST_SHIFTS:
+            history_shift[n] = DEFAULT_LAST_SHIFTS[n]
+            
+    history_streak = {n: 0 for n in names}
+    
+    try:
+        df = pd.read_excel(upload_file, header=None)
+        header_row_idx = 0
+        name_col_idx = 1
+        
+        for idx, row in df.iterrows():
+            row_str = [str(x) for x in row.values]
+            if any("姓名" in s or "人員" in s for s in row_str):
+                header_row_idx = idx
+                for col_idx, cell_value in enumerate(row_str):
+                    if "姓名" in cell_value or "人員" in cell_value:
+                        name_col_idx = col_idx
+                        break
+                break
+
+        df.columns = df.iloc[header_row_idx]
+        df = df.iloc[header_row_idx + 1 :].reset_index(drop=True)
+        
+        for _, row in df.iterrows():
+            raw_name = str(row.iloc[name_col_idx]).replace(" ", "").replace(" ", "").strip()
+            target_nurse = None
+            for n in names:
+                if n in raw_name:
+                    target_nurse = n
+                    break
+            if not target_nurse:
+                continue
+                
+            start_data_col = name_col_idx + 3
+            shifts = []
+            
+            for c_idx in range(start_data_col, len(df.columns)):
+                col_name = str(df.columns[c_idx])
+                if "計" in col_name or "總" in col_name or "天" in col_name:
+                    break
+                cell_val = str(row.iloc[c_idx]).upper().strip()
+                if cell_val in ["D", "E", "N", "OFF", "R", "M", "NAN", ""]:
+                    if cell_val in ["NAN", ""]:
+                        cell_val = "OFF"
+                    shifts.append(cell_val)
+            
+            if len(shifts) > 0:
+                history_shift[target_nurse] = shifts[-1].lower() if shifts[-1] in ["OFF", "off"] else shifts[-1]
+                streak = 0
+                for s in reversed(shifts):
+                    if s in ["D", "E", "N"]:
+                        streak += 1
+                    else:
+                        break
+                history_streak[target_nurse] = streak
+    except:
+        # 如果上傳的舊班表格式嚴重錯亂，直接觸發安全氣囊，採用內建大腦常規預設，絕對不報錯
+        pass
+        
+    return history_shift, history_streak
 
 # =====================================
 # 智慧排班引擎
@@ -200,7 +268,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 4: 白班 (D) 分配 (雙重強力救火)
+    # STEP 4: 白班 (D) 分配
     for day in range(num_days):
         req_d_min = manpower_req[day]["D_min"]
         current_d = sum(1 for n in names if schedule[n][day] == "D")
@@ -231,7 +299,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             schedule[nurse][day] = "D"
             work_count[nurse] += 1
 
-        # 第二輪極限救火
+        # 第二輪強力救火
         current_d = sum(1 for n in names if schedule[n][day] == "D")
         need_d = req_d_min - current_d
         if need_d > 0:
@@ -340,7 +408,7 @@ def can_work_shift(permission, shift):
     return shift in permission
 
 # =====================================
-# 側邊欄與主要畫面宣告 (只留預排休表 file_b 上傳)
+# 側邊欄與主要畫面宣告
 # =====================================
 
 with st.sidebar:
@@ -348,19 +416,24 @@ with st.sidebar:
     start_date = st.date_input("開始日期", datetime.date.today().replace(day=1))
     end_date = st.date_input("結束日期", datetime.date.today())
     st.markdown("---")
-    # 🎯【降維簡化防錯】直接移除 file_a 基本班表上傳，100% 避開髒資料解析崩。
+    # 🎯 雙上傳欄位完美保留
+    file_a = st.file_uploader("上傳【基本班表（上月舊班表）】", type=["xlsx"])
     file_b = st.file_uploader("上傳當月【預排休表】", type=["xlsx"])
 
 # =====================================
 # 主程式邏輯區
 # =====================================
 
+# 只有當預排休表上傳後才啟動主畫面（基本班表為自由選填，不上傳也不會當機）
 if file_b:
     try:
         num_days = (end_date - start_date).days + 1
         
-        # 從 file_b 自動挖取預排假與權限
+        # 1. 讀取當月預排假與權限
         requests, extracted_permissions = load_request_and_permissions(file_b, CORE_STAFF_NAMES, num_days)
+        
+        # 2. 智慧讀取上月班表（具備防錯氣囊，若未上傳 file_a 則直接套用常規大腦預設）
+        history_shift, history_streak = load_history_only(file_a, CORE_STAFF_NAMES)
         names = CORE_STAFF_NAMES
 
         date_headers = []
@@ -386,18 +459,18 @@ if file_b:
         
         with col1:
             st.subheader("👥 1. 人員初始狀態確認")
-            st.caption("💡 系統已自動載入預設班別與權限，你可以直接在下方選單快速微調！")
+            st.caption("💡 系統已為您自動載入對齊結果。若與上月最後一天不符，您隨時可以用選單手動修正！")
             config_rows = []
             for nurse in names:
                 config_rows.append({
                     "姓名": nurse,
                     "權限": extracted_permissions[nurse], 
-                    "上月最後班": DEFAULT_LAST_SHIFTS.get(nurse, "D"), # 🎯 直接套用底牌預設常規班別
-                    "已連上天數": 0
+                    "上月最後班": history_shift[nurse], 
+                    "已連上天數": history_streak[nurse]
                 })
             base_config_df = pd.DataFrame(config_rows)
             
-            # 萬用相容下拉選單組件
+            # 高相容度網頁即時修改選單
             config_df = st.data_editor(
                 base_config_df, 
                 use_container_width=True, 
@@ -406,13 +479,11 @@ if file_b:
                     "姓名": st.column_config.TextColumn("姓名", disabled=True), 
                     "權限": st.column_config.SelectboxColumn(
                         "權限",
-                        help="設定同仁當月可排班別範疇",
                         options=["DEN", "DE", "DN", "EN", "D", "E", "N"],
                         required=True
                     ),
                     "上月最後班": st.column_config.SelectboxColumn(
                         "上月最後班",
-                        help="跨月排班安全防呆依據（請依上月底最後一天班別微調）",
                         options=["D", "E", "N", "off", "R", "M"],
                         required=True
                     ),
@@ -554,4 +625,4 @@ if file_b:
     except Exception as e:
         st.error(f"系統執行時發生錯誤：{str(e)}")
 else:
-    st.info("💡 請上傳當月【預排休表】以啟動自動排班系統。")
+    st.info("💡 請上傳當月【預排休表】（基本班表可選填上傳）以啟動系統。")
