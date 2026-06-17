@@ -193,19 +193,59 @@ config_df = st.data_editor(
     },
 )
 
-st.subheader("📊 2. 每日人力上下限")
-default_manpower = default_manpower_by_dates(start_date, num_days)
-manpower_editor = []
-for d in range(num_days):
-    row = {"日期": date_headers[d]}
-    row.update(default_manpower[d])
-    manpower_editor.append(row)
+st.subheader("📊 2. 每週人力上下限")
 
-manpower_df = st.data_editor(
-    pd.DataFrame(manpower_editor),
+weeks_setup = []
+
+current_week = 1
+
+for d in range(num_days):
+
+    curr_date = start_date + datetime.timedelta(days=d)
+
+    week_no = curr_date.isocalendar()[1]
+
+    is_weekend = curr_date.weekday() in [5, 6]
+
+    label = (
+        f"第{week_no}週-假日"
+        if is_weekend
+        else f"第{week_no}週-平日"
+    )
+
+    if label not in [
+        x["週別"]
+        for x in weeks_setup
+    ]:
+
+        if is_weekend:
+
+            weeks_setup.append({
+                "週別": label,
+                "D_min": 3,
+                "D_max": 5,
+                "E_min": 2,
+                "E_max": 4,
+                "N_min": 2,
+                "N_max": 2
+            })
+
+        else:
+
+            weeks_setup.append({
+                "週別": label,
+                "D_min": 4,
+                "D_max": 6,
+                "E_min": 3,
+                "E_max": 4,
+                "N_min": 2,
+                "N_max": 2
+            })
+
+weekly_df = st.data_editor(
+    pd.DataFrame(weeks_setup),
     use_container_width=True,
-    num_rows="fixed",
-    column_config={"日期": st.column_config.TextColumn("日期", disabled=True)},
+    num_rows="fixed"
 )
 
 permissions = {}
