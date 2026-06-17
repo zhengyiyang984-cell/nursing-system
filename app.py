@@ -10,8 +10,8 @@ from schedule_statistics import build_schedule_dataframe, build_manpower_datafra
 from validator import validate_schedule, issues_to_dataframe
 from exporter import export_workbook
 
-st.set_page_config(page_title="2F護理排班系統 V3.0", layout="wide")
-st.title("🏥 2F護理排班系統 V3.0")
+st.set_page_config(page_title="2F護理排班系統 ", layout="wide")
+st.title("🏥 2F護理排班系統 ")
 st.caption("AI最佳化・N→N→off→off・最多連上5天・全職休假保底・郭珍君10天D班")
 
 if "best_result" not in st.session_state:
@@ -47,7 +47,13 @@ if not file_request:
 
 try:
     requests, extracted_permissions = load_request_and_permissions(file_request, CORE_STAFF, num_days)
-    history_shift, history_streak = load_history_only(file_history, CORE_STAFF)
+   history_shift,\
+history_streak,\
+auto_permissions = \
+    load_history_and_permission(
+        file_a,
+        CORE_STAFF
+    )
 except Exception as exc:
     st.error(f"Excel 讀取失敗：{exc}")
     st.stop()
@@ -90,6 +96,18 @@ manpower_df = st.data_editor(
 )
 
 permissions = {}
+
+for nurse in CORE_STAFF:
+
+    if nurse in auto_permissions:
+
+        permissions[nurse] = \
+            auto_permissions[nurse]
+
+    else:
+
+        permissions[nurse] = \
+            request_permissions[nurse]
 history_shift_final = {}
 history_streak_final = {}
 for _, row in config_df.iterrows():
