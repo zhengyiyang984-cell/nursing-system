@@ -10,11 +10,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (大夜連續積班完全體)",
+    page_title="2F護理排班系統 (2-4天彈性積班優化版)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (大夜連續積班完全體)")
+st.title("🏥 2F護理排班系統 (2-4天彈性積班優化版)")
 
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
@@ -180,7 +180,7 @@ def load_history_only(upload_file, names):
     return history_shift, history_streak
 
 # =====================================
-# 智慧排班引擎 (大夜連續積班完全體)
+# 智慧排班引擎 (2-4天彈性積班優化版)
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
@@ -204,12 +204,24 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 curr_streak = 0
         return curr_streak
 
+    # 🎯【優化】：動態調整連續上班的權重，引導系統以 2-4 天為主，避免盲目衝到 5 天
     def get_work_continuation_weight(nurse_name, day_idx):
+        streak = get_current_streak(nurse_name, day_idx)
         if day_idx == 0:
-            return 15 if history_shift.get(nurse_name) in ["D", "E", "N"] else 0
-        return 15 if schedule[nurse_name][day_idx - 1] in ["D", "E", "N"] else 0
+            has_worked = history_shift.get(nurse_name) in ["D", "E", "N"]
+        else:
+            has_worked = schedule[nurse_name][day_idx - 1] in ["D", "E", "N"]
+            
+        if not has_worked:
+            return 0
+            
+        if streak >= 4:
+            return 2  # 已經連 4 天了，大幅降低繼續接班的意願，促使其走向休假
+        elif streak >= 2:
+            return 15 # 連上 2-3 天，這是最理想的積班長度，給予最高優先權重
+        return 10     # 連上 1 天，鼓勵繼續積班變成 2 天
 
-    # STEP 2: 大夜班 (N) 分配 —— 🚀 支援 N->N 接班，連上 2-5 天
+    # STEP 2: 大夜班 (N) 分配 —— 支援 N->N 接班，2-4天為主
     for day in range(num_days):
         req_n_min = manpower_req[day]["N_min"]
         req_n_max = manpower_req[day]["N_max"]
@@ -234,23 +246,19 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             if get_current_streak(nurse, day) >= 5:
                 continue
                 
-            # 🎯【優化調整】：只有在前一次上大夜班、但中間「已經斷掉（變off或上別的）」時，才需要被卡連休 2 天。
-            # 如果是 N 班正要連續接 N 班（例如昨天是 N，今天也是要排 N），是不受限制的！
-            # 這裡反推卡死：如果前一天不是 N，但更前一天是 N（代表昨天已經下大夜了），那今天必須在 2 天休假範疇內。
+            # 大夜下班斷掉時要連休 2 天
             if day == 1 and history_shift.get(nurse) == "N" and schedule[nurse][0] != "N":
                 continue
             if day > 1:
                 if schedule[nurse][day - 1] != "N" and schedule[nurse][day - 2] == "N":
                     continue
                 if day > 2 and schedule[nurse][day - 1] != "N" and schedule[nurse][day - 2] != "N" and schedule[nurse][day - 3] == "N":
-                    # 補足下大夜後 2 天休假判定
                     if schedule[nurse][day - 2] == "off" or schedule[nurse][day - 2] == "R":
                         pass 
                 
             candidates.append(nurse)
 
         random.shuffle(candidates)
-        # 排序權重：1. 昨天是大夜的人（大夜積班最優先 N->N） 2. 昨天上常規班的人（連續上班優先）
         candidates.sort(
             key=lambda x: (
                 25 if (day > 0 and schedule[x][day - 1] == "N") or (day == 0 and history_shift.get(x) == "N") else 0,
@@ -267,7 +275,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 3: 小夜班 (E) 分配 —— 嚴格守護大夜後連休 2 天
+    # STEP 3: 小夜班 (E) 分配
     for day in range(num_days):
         req_e_min = manpower_req[day]["E_min"]
         req_e_max = manpower_req[day]["E_max"]
@@ -292,7 +300,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             if get_current_streak(nurse, day) >= 5:
                 continue
                 
-            # 🎯 臨床硬規則：大夜下班後（N 區塊結束後）一定要連休 2 天，不能上小夜
+            # 大夜下班連休 2 天
             if day == 0 and history_shift.get(nurse) == "N":
                 continue
             if day == 1 and (schedule[nurse][0] == "N" or history_shift.get(nurse) == "N"):
@@ -325,7 +333,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 4: 白班 (D) 分配 —— 嚴格守護大夜後連休 2 天 ＆ 小夜不接白班（E不接D）
+    # STEP 4: 白班 (D) 分配
     for day in range(num_days):
         req_d_min = manpower_req[day]["D_min"]
         req_d_max = manpower_req[day]["D_max"]
@@ -349,7 +357,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 if get_current_streak(nurse, day) >= 5:
                     continue
                     
-                # 大夜下班後要連休 2 天，不能上白班
+                # 大夜下班連休 2 天
                 if day == 0 and history_shift.get(nurse) == "N":
                     continue
                 if day == 1 and (schedule[nurse][0] == "N" or history_shift.get(nurse) == "N"):
