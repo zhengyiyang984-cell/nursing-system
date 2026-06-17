@@ -345,7 +345,7 @@ if file_b:
                             schedule[n][d+1] = curr_shift
                         elif d > 0 and (d-1 < len(requests[n]) and requests[n][d-1] == "") and is_shift_safe(n, d-1, curr_shift):
                             schedule[n][d-1] = curr_shift
-    return schedule
+        return schedule
 
 # =====================================
 # Streamlit 主程式介面
