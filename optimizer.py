@@ -11,7 +11,7 @@ def safe_stdev(values):
         return 0
 
     try:
-        return statistics.pstdev(values)
+        return py_statistics.pstdev(values)
     except:
         return 0
 
