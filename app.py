@@ -9,11 +9,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (終極破鎖完全體)",
+    page_title="2F護理排班系統 ",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (剛性保底・每日人力100%滿足完全體)")
+st.title("🏥 2F護理排班系統")
 
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
@@ -312,7 +312,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                         schedule[nurse][target_day] = "D"
                         allocated_days_indices.add(target_day)
 
-    # 🎯 STEP 5.5:【全班別交叉救火 - 常規剛性保底】
+    # STEP 5.5:【全班別交叉救火 - 常規剛性保底】
     for day in range(num_days):
         for shift_type in ["N", "E", "D"]:
             min_req = manpower_req[day][f"{shift_type}_min"]
@@ -338,7 +338,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 chosen_nurse = possible_rescuers[0][0]
                 schedule[chosen_nurse][day] = shift_type
                 
-                # 自動連帶補班防碎班
                 if day < num_days - 1 and schedule[chosen_nurse][day+1] == "" and is_shift_safe(chosen_nurse, day+1, shift_type):
                     schedule[chosen_nurse][day+1] = shift_type
                 elif day > 0 and schedule[chosen_nurse][day-1] == "" and is_shift_safe(chosen_nurse, day-1, shift_type):
@@ -346,8 +345,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                         
                 current_count = sum(1 for n in names if schedule[n][day] == shift_type)
 
-    # 🎯 STEP 5.6:【終極破鎖急救大腦（Manpower Absolute Override）】
-    # 當遇到 06/26 等連假、大批人預排休假導致前面常規補洞失效時，此處強制破鎖，100% 灌滿最低人力！
+    # STEP 5.6:【終極破鎖急救大腦（Manpower Absolute Override）】
     for day in range(num_days):
         for shift_type in ["N", "E", "D"]:
             min_req = manpower_req[day][f"{shift_type}_min"]
@@ -357,9 +355,8 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 emergency_candidates = []
                 for nurse in names:
                     if nurse in PART_TIME_STAFFS: continue
-                    if schedule[nurse][day] != "": continue # 必須是當天空格
+                    if schedule[nurse][day] != "": continue 
                     
-                    # 🚀 破鎖急救條件：放寬「連班、碎班、總假數」限制，僅死守唯一鐵律：小夜不接白班、大夜不接白/小夜
                     iron_safe = True
                     if shift_type == "D" and day > 0 and schedule[nurse][day-1] in ["N", "E"]: iron_safe = False
                     if shift_type == "D" and day == 0 and history_shift.get(nurse) in ["N", "E"]: iron_safe = False
@@ -373,13 +370,11 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                         
                 if not emergency_candidates: break
                 
-                # 挑選當月被排班總數最少的人出來緊急頂替
                 emergency_candidates.sort(key=lambda x: sum(1 for s in schedule[x] if s in ["D", "E", "N"]))
                 lucky_nurse = emergency_candidates[0]
                 
                 schedule[lucky_nurse][day] = shift_type
                 
-                # 🚀 碎班平滑連動：如果是單打獨鬥的一天班，主動去向後或向前補連，消除碎班提醒
                 if day < num_days - 1 and schedule[lucky_nurse][day+1] == "" and (day+1 < len(requests[lucky_nurse]) and requests[lucky_nurse][day+1] == ""):
                     schedule[lucky_nurse][day+1] = shift_type
                 elif day > 0 and schedule[lucky_nurse][day-1] == "" and (day-1 < len(requests[lucky_nurse]) and requests[lucky_nurse][day-1] == ""):
@@ -491,7 +486,7 @@ if file_b:
                     "姓名": st.column_config.TextColumn("姓名", disabled=True), 
                     "權限": st.column_config.SelectboxColumn("權限", options=["DEN", "DE", "DN", "EN", "D", "E", "N"], required=True),
                     "上月最後班": st.column_config.SelectboxColumn("上月最後班", options=["D", "E", "N", "off", "R", "M"], required=True),
-                    "回連上天數": st.column_config.NumberColumn("已連上天數", min_value=0, max_value=5, step=1)
+                    "已連上天數": st.column_config.NumberColumn("已連上天數", min_value=0, max_value=5, step=1)
                 }
             )
 
@@ -516,10 +511,11 @@ if file_b:
             raw_name = str(config_df.iloc[idx]["姓名"]).strip()
             permissions[raw_name] = str(config_df.iloc[idx]["權限"]).upper().strip()
             history_shift_final[raw_name] = str(config_df.iloc[idx]["上月最後班"]).strip()
-            history_streak_final[raw_name] = int(config_df.iloc[idx]["上月最後班"]) # 修正對應至已連上天數
+            # 🎯 這裡修正了：正確讀取網頁表格中的「已連上天數」欄位
+            history_streak_final[raw_name] = int(config_df.iloc[idx]["已連上天數"]) 
 
         st.markdown("---")
-        if st.button("🚀 啟動終極平衡自動排班系統", type="primary", use_container_width=True):
+        if st.button("🚀 啟動自動排班系統", type="primary", use_container_width=True):
             with st.spinner("終極破鎖與急救計算中..."):
                 st.session_state["schedule_result"] = generate_schedule(names, permissions, requests, num_days, manpower_req_list, history_shift_final, history_streak_final)
                 st.session_state["run_success"] = True
@@ -549,7 +545,7 @@ if file_b:
             night_df = pd.DataFrame([[n, sum(1 for x in result[n] if x == "E"), sum(1 for x in result[n] if x == "N"), sum(1 for x in result[n] if x in ["E", "N"])] for n in names], columns=["姓名", "小夜(E)", "大夜(N)", "夜班總計"])
 
             issues = []
-            # 🚨 每日實際人力完美檢驗
+            # 每日實際人力完美檢驗
             for d in range(num_days):
                 d_count = sum(1 for n in names if result[n][d] == "D")
                 e_count = sum(1 for n in names if result[n][d] == "E")
@@ -597,7 +593,7 @@ if file_b:
                 night_df.to_excel(writer, sheet_name="夜班統計", index=False)
                 
             st.markdown("---")
-            st.download_button(label="📥 下載兼職雙鎖定・終極完美 Excel", data=output.getvalue(), file_name=f"2F護理完美排班_{start_date.strftime('%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            st.download_button(label="📥 下載Excel", data=output.getvalue(), file_name=f"2F護理排班_{start_date.strftime('%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     except Exception as e:
         st.error(f"系統執行錯誤：{str(e)}")
 else:
