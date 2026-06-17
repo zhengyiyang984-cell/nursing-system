@@ -6,7 +6,7 @@ from config import *
 from loader import load_request_and_permissions, load_history_only
 from utils import make_date_headers, default_manpower_by_dates
 from optimizer import optimize_schedule
-from statistics import build_schedule_dataframe, build_manpower_dataframe, build_person_statistics
+from schedule_statistics import build_schedule_dataframe, build_manpower_dataframe, build_person_statistics
 from validator import validate_schedule, issues_to_dataframe
 from exporter import export_workbook
 
