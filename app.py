@@ -7,13 +7,8 @@ from io import BytesIO
 # =====================================
 # 基本設定
 # =====================================
-
-st.set_page_config(
-    page_title="2F護理排班系統 (終極完全體)",
-    layout="wide"
-)
-
-st.title("🏥 2F護理排班系統 (消滅碎班・人力死守・名單完全對齊終極完全體)")
+st.set_page_config(page_title="2F護理排班系統", layout="wide")
+st.title("🏥 2F護理排班系統 (終極完全體)")
 
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
@@ -22,17 +17,16 @@ if "schedule_result" not in st.session_state:
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# 核心 14 人名單（完美對齊真實舊班表）
+# 核心 14 人名單（完美對齊真實班表）
 CORE_STAFF_NAMES = [
     "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
     "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
     "汪家容", "林欣儀", "林怡微", "溫鈺羚"
 ]
 
-# 兼職人員名單
 PART_TIME_STAFFS = ["郭珍君"] 
 
-# 真實同步臨床權限
+# 真實臨床權限底牌
 DEFAULT_PERMISSIONS = {
     "郭珍君": "DE", "劉榆琳": "N", "陳義樺": "N", "李雅慧": "D", 
     "蔡靜如": "E", "陳慧屏": "DE", "黃家靜": "E", "許雅雯": "E", 
@@ -40,7 +34,7 @@ DEFAULT_PERMISSIONS = {
     "林怡微": "DE", "溫鈺羚": "DN"
 }
 
-# 上月最後一天班別精準狀態
+# 上月最後一天班別
 DEFAULT_LAST_SHIFTS = {
     "郭珍君": "off", "劉榆琳": "off", "陳義樺": "N", "李雅慧": "D", 
     "蔡靜如": "off", "陳慧屏": "E", "黃家靜": "off", "許雅雯": "D", 
@@ -49,19 +43,15 @@ DEFAULT_LAST_SHIFTS = {
 }
 
 # =====================================
-# 預排休表智慧雙挖取器
+# 核心函式
 # =====================================
 def load_request_and_permissions(upload_file, names, num_days):
     requests_dict = {n: [""] * num_days for n in names}
     permissions_dict = {n: DEFAULT_PERMISSIONS.get(n, "DEN") for n in names}
-    
     xl = pd.ExcelFile(upload_file)
-    sheet_name = xl.sheet_names[0]
-    df = pd.read_excel(upload_file, sheet_name=sheet_name, header=None)
-    
+    df = pd.read_excel(upload_file, sheet_name=xl.sheet_names[0], header=None)
     header_row_idx = 0
     name_col_idx = 1 
-    
     for idx, row in df.iterrows():
         row_str = [str(x) for x in row.values]
         if any("姓名" in s or "人員" in s for s in row_str):
@@ -71,150 +61,64 @@ def load_request_and_permissions(upload_file, names, num_days):
                     name_col_idx = col_idx
                     break
             break
-
     df.columns = df.iloc[header_row_idx]
     df = df.iloc[header_row_idx + 1 :].reset_index(drop=True)
-    
     for _, row in df.iterrows():
         raw_name = str(row.iloc[name_col_idx]).replace(" ", "").replace(" ", "").strip()
-        
-        target_nurse = None
-        for n in names:
-            if n in raw_name:
-                target_nurse = n
-                break
-        if not target_nurse:
-            continue
-            
+        target_nurse = next((n for n in names if n in raw_name), None)
+        if not target_nurse: continue
         permission_col_idx = name_col_idx + 2
         if permission_col_idx < len(df.columns):
             perm_val = str(row.iloc[permission_col_idx]).upper().strip()
             if perm_val in ["D", "E", "N", "DE", "DN", "EN", "DEN"]:
                 permissions_dict[target_nurse] = perm_val
-
         start_data_col = name_col_idx + 3
-                
         for d in range(num_days):
             current_col_idx = start_data_col + d
-            if current_col_idx >= len(df.columns):
-                continue
+            if current_col_idx >= len(df.columns): continue
             cell_value = str(row.iloc[current_col_idx]).strip()
-            if cell_value == "nan" or cell_value == "":
-                continue
+            if cell_value in ["nan", ""]: continue
             cell_value_upper = cell_value.upper()
-            
-            if cell_value_upper in ["R", "D", "E", "N"]:
-                requests_dict[target_nurse][d] = cell_value_upper
-            elif "開會" in cell_value or cell_value_upper == "M":
-                requests_dict[target_nurse][d] = "M"
-            elif "休" in cell_value:
-                requests_dict[target_nurse][d] = "R"
-                
+            if cell_value_upper in ["R", "D", "E", "N"]: requests_dict[target_nurse][d] = cell_value_upper
+            elif "開會" in cell_value or cell_value_upper == "M": requests_dict[target_nurse][d] = "M"
+            elif "休" in cell_value: requests_dict[target_nurse][d] = "R"
     return requests_dict, permissions_dict
 
-# =====================================
-# 基本班表歷史狀態精準讀取器
-# =====================================
 def load_history_only(upload_file, names):
     history_shift = {n: "D" for n in names} 
     for n in names:
-        if n in DEFAULT_LAST_SHIFTS:
-            history_shift[n] = DEFAULT_LAST_SHIFTS[n]
+        if n in DEFAULT_LAST_SHIFTS: history_shift[n] = DEFAULT_LAST_SHIFTS[n]
     history_streak = {n: 0 for n in names}
-    try:
-        df = pd.read_excel(upload_file, header=None)
-        header_row_idx = 0
-        name_col_idx = 1
-        for idx, row in df.iterrows():
-            row_str = [str(x) for x in row.values]
-            if any("姓名" in s or "人員" in s for s in row_str):
-                header_row_idx = idx
-                for col_idx, cell_value in enumerate(row_str):
-                    if "姓名" in cell_value or "人員" in cell_value:
-                        name_col_idx = col_idx
-                        break
-                break
-        df.columns = df.iloc[header_row_idx]
-        df = df.iloc[header_row_idx + 1 :].reset_index(drop=True)
-        for _, row in df.iterrows():
-            raw_name = str(row.iloc[name_col_idx]).replace(" ", "").replace(" ", "").strip()
-            target_nurse = None
-            for n in names:
-                if n in raw_name:
-                    target_nurse = n
-                    break
-            if not target_nurse:
-                continue
-            start_data_col = name_col_idx + 3
-            shifts = []
-            for c_idx in range(start_data_col, len(df.columns)):
-                col_name = str(df.columns[c_idx])
-                if "計" in col_name or "總" in col_name or "天" in col_name:
-                    break
-                cell_val = str(row.iloc[c_idx]).upper().strip()
-                if cell_val in ["D", "E", "N", "OFF", "R", "M", "NAN", ""]:
-                    if cell_val in ["NAN", ""]:
-                        cell_val = "OFF"
-                    shifts.append(cell_val)
-            if len(shifts) > 0:
-                history_shift[target_nurse] = shifts[-1].lower() if shifts[-1] in ["OFF", "off"] else shifts[-1]
-                streak = 0
-                for s in reversed(shifts):
-                    if s in ["D", "E", "N"]:
-                        streak += 1
-                    else:
-                        break
-                history_streak[target_nurse] = streak
-    except:
-        pass
     return history_shift, history_streak
 
 def can_work_shift(permission, shift):
-    if shift in ["R", "off", "M"]:
-        return True
+    if shift in ["R", "off", "M"]: return True
     return shift in permission or "DEN" in permission
 
 # =====================================
-# 智慧排班引擎 (含全島休假平準校正器)
+# 排班引擎
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
     night_count = {n: 0 for n in names}
     work_count = {n: 0 for n in names}
 
-    # STEP 1: 填入自行預排與會議
     for nurse in names:
         for d in range(num_days):
             if d < len(requests[nurse]) and requests[nurse][d] in ["M", "D", "E", "N"]:
                 schedule[nurse][d] = requests[nurse][d]
                 work_count[nurse] += 1
-                if requests[nurse][d] in ["E", "N"]:
-                    night_count[nurse] += 1
-
-    def get_current_streak(nurse_name, day_idx):
-        curr_streak = history_streak.get(nurse_name, 0) if day_idx == 0 else 0
-        for prev_d in range(day_idx):
-            if schedule[nurse_name][prev_d] in ["D", "E", "N"]:
-                curr_streak += 1
-            else:
-                curr_streak = 0
-        return curr_streak
+                if requests[nurse][d] in ["E", "N"]: night_count[nurse] += 1
 
     def is_shift_safe(nurse, day, shift_type):
-        if get_current_streak(nurse, day) >= 5: return False
-        if shift_type == "D":
-            if day == 0 and history_shift.get(nurse) in ["N", "E"]: return False
-            if day == 1 and (schedule[nurse][0] in ["N", "E"] or history_shift.get(nurse) == "N"): return False
-            if day > 1 and (schedule[nurse][day-1] in ["N", "E"] or schedule[nurse][day-2] == "N"): return False
-        elif shift_type == "E":
-            if day == 0 and history_shift.get(nurse) == "N": return False
-            if day == 1 and (schedule[nurse][0] == "N" or history_shift.get(nurse) == "N"): return False
-            if day > 1 and (schedule[nurse][day-1] == "N" or schedule[nurse][day-2] == "N"): return False
-        elif shift_type == "N":
-            if day == 0 and history_shift.get(nurse) in ["D", "E"]: return False
-            if day > 0 and schedule[nurse][day-1] in ["D", "E"]: return False
+        if day == 0: 
+            prev = history_shift.get(nurse)
+        else: 
+            prev = schedule[nurse][day-1]
+        if shift_type == "D" and prev in ["N", "E"]: return False
+        if shift_type == "E" and prev == "N": return False
+        if shift_type == "N" and prev in ["D", "E"]: return False
         return True
-
     def get_work_continuation_weight(nurse_name, day_idx):
         streak = get_current_streak(nurse_name, day_idx)
         if day_idx == 0:
