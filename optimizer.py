@@ -1,5 +1,5 @@
 import random
-import statistics
+import statistics as py_statistics
 from scheduler import build_schedule_once
 from validator import validate_schedule
 from config import *
