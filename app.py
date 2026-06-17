@@ -1,26 +1,21 @@
 # app.py
 import streamlit as st
 import loader
-import scheduler
 import validator
 
-st.title("2F 護理站自動排班系統")
+st.title("🏥 2F 護理排班系統雛型")
 
-uploaded_file = st.file_uploader("上傳排班需求 Excel", type="xlsx")
+uploaded_file = st.file_uploader("上傳你的排班表 (CSV)", type="csv")
 
 if uploaded_file:
-    data = loader.load_excel(uploaded_file)
+    df = loader.load_data(uploaded_file)
+    st.write("### 目前排班表", df)
     
-    if st.button("開始排班"):
-        # 1. 執行核心演算法
-        raw_schedule = scheduler.generate(data)
-        
-        # 2. 驗證合法性
-        v = validator.ScheduleValidator(raw_schedule)
-        is_valid, msg = v.validate_all()
-        
-        if is_valid:
-            st.success("排班完成！")
-            st.dataframe(raw_schedule)
+    st.write("### 兼職人員檢查 (上限 10 天)")
+    staff_list = df['姓名/職級'].unique()
+    for staff in staff_list:
+        is_ok, count = validator.check_staff_limit(df, staff)
+        if not is_ok:
+            st.error(f"⚠️ {staff}: 已排 {count} 天 (超出限制)")
         else:
-            st.error(f"排班失敗: {msg}")
+            st.success(f"✅ {staff}: 已排 {count} 天")
