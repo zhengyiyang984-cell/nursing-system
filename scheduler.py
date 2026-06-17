@@ -242,14 +242,16 @@ class NurseScheduler:
                 candidates = []
                 for nurse in self.names:
 
-    if nurse in PART_TIME:
-        continue
+                    if nurse in PART_TIME:
+                        continue
                     if self._can_assign(nurse, day, shift, allow_overwrite_off=True):
                         candidates.append(nurse)
                 if not candidates:
                     break
                 self.random.shuffle(candidates)
                 candidates.sort(key=lambda n: self._candidate_score(n, day, shift), reverse=True)
+                if shift == SHIFT_N:
+                    break
                 self.schedule[candidates[0]][day] = shift
 
     def _candidate_score(self, nurse, day, shift):
