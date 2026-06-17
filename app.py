@@ -9,7 +9,7 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (終極平衡完全體)",
+    page_title="2F護理排班系統 (終極完全體)",
     layout="wide"
 )
 
@@ -290,7 +290,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 valid_starts = []
                 for start_d in range(num_days - b_len + 1):
                     if start_d > 0 and (start_d - 1) in allocated_days_indices: continue
-                    if (start_d + b_len) < num_days and (start_d + b_len) in allocated_days_indices: continue
+                    if (start_d + b_len) < num_days && (start_d + b_len) in allocated_days_indices: continue
                     block_ok = True
                     for offset in range(b_len):
                         curr_day = start_d + offset
@@ -364,7 +364,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
     # 🎯 STEP 7:【全職休假均勻平衡與全自動 1 天碎班清除引擎】
     full_time_nurses = [n for n in names if n not in PART_TIME_STAFFS]
     
-    # 🎯【優化核心】：拉高休假平準化循環次數，並導入跨人班別轉移
+    # 🎯【大平準校正】：拉高休假平準化循環次數，並導入跨人班別轉移，死守 3 人休假
     for loop in range(15):
         current_holidays = {n: sum(1 for x in schedule[n] if x in ["off", "R"]) for n in full_time_nurses}
         under_rest = [n for n in full_time_nurses if current_holidays[n] < 8]
@@ -374,7 +374,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             for shift_type in ["D", "E", "N"]:
                 c_count = sum(1 for n in names if schedule[n][d] == shift_type)
                 
-                # 策略 A：如果當天原本的人數大於最低限度，直接無痛退班變 off，還假給林欣蓓、林怡微！
+                # 策略 A：如果當天原本的人數大於最低限度，直接無痛退班變 off！
                 if c_count > manpower_req[d][f"{shift_type}_min"]:
                     under_rest.sort(key=lambda x: current_holidays[x])
                     for target_nurse in under_rest:
@@ -384,16 +384,14 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                             break
                     break
                 
-                # 🚀 策略 B：如果人數「剛好壓在最低限制」不能直接拿掉，則尋找有沒有假太多的人（休假天數 > 9天）可以出來頂替！
+                # 🚀 策略 B：如果人數「剛好壓在最低限制」，則尋找有沒有假很多的人（休假天數 >= 9天）出來交叉頂替！
                 elif c_count == manpower_req[d][f"{shift_type}_min"]:
                     under_rest.sort(key=lambda x: current_holidays[x])
                     for target_nurse in under_rest:
                         if schedule[target_nurse][d] == shift_type and (d < len(requests[target_nurse]) and requests[target_nurse][d] == ""):
-                            # 找出當天正在放假（off）且特飽水、假很多的人
                             helpers = [n for n in full_time_nurses if schedule[n][d] == "off" and current_holidays[n] >= 9 and can_work_shift(permissions[n], shift_type) and is_shift_safe(n, d, shift_type)]
                             if helpers:
                                 chosen_helper = random.choice(helpers)
-                                # 完美的跨人班別置換：林欣蓓/林怡微去休息，假很多的人過來頂班
                                 schedule[target_nurse][d] = "off"
                                 schedule[chosen_helper][d] = shift_type
                                 current_holidays[target_nurse] += 1
@@ -520,7 +518,7 @@ if file_b:
 
         st.markdown("---")
         if st.button("🚀 啟動全智慧臨床優化平衡排班系統", type="primary", use_container_width=True):
-            with st.spinner("正在執行跨人班別移轉、召回林欣蓓與林怡微的8天法定假..."):
+            with st.spinner("正在執行大數據平衡，還回林欣蓓、陳萱芸、林怡微的法定休假中..."):
                 st.session_state["schedule_result"] = generate_schedule(names, permissions, requests, num_days, manpower_req_list, history_shift_final, history_streak_final)
                 st.session_state["run_success"] = True
 
@@ -586,7 +584,7 @@ if file_b:
             with tabs[2]: st.dataframe(holiday_df, use_container_width=True)
             with tabs[3]: st.dataframe(night_df, use_container_width=True)
             with tabs[4]:
-                if not issues: st.success("🎉 終極綠燈降臨！林欣蓓、林怡微休假全數回歸大於等於 8 天，全月無碎班、人力完全達標，完美的最終大結局班表出爐！")
+                if not issues: st.success("🎉 終極綠燈大功告成！林欣蓓、陳萱芸、林怡微休假全數重回大於等於 8 天，全月無碎班、人力完全滿足，完美的最終大結局班表出爐！")
                 else: st.dataframe(pd.DataFrame(issues, columns=["對象 / 類別", "優化與急救警報提醒"]), use_container_width=True)
 
             output = BytesIO()
