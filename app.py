@@ -5,17 +5,66 @@ import random
 from io import BytesIO
 
 # =====================================
-# 1. 基礎設定與名單 (對齊真實班表)
+# 1. 基礎設定與對齊真實名單
 # =====================================
 st.set_page_config(page_title="2F護理排班系統", layout="wide")
-st.title("🏥 2F護理排班系統 (完整版)")
+st.title("🏥 2F護理排班系統 (名單完全對齊・休假保底完全體)")
 
-CORE_STAFF_NAMES = ["郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", "汪家容", "林欣儀", "林怡微", "溫鈺羚"]
-PART_TIME_STAFFS = ["郭珍君"]
+# 🎯 真實名單：移除陳威宇，對齊檔案
+CORE_STAFF_NAMES = [
+    "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
+    "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
+    "汪家容", "林欣儀", "林怡微", "溫鈺羚"
+]
+PART_TIME_STAFFS = ["郭珍君"] 
 
-DEFAULT_PERMISSIONS = {n: "DEN" for n in CORE_STAFF_NAMES}
-DEFAULT_LAST_SHIFTS = {n: "D" for n in CORE_STAFF_NAMES}
+# =====================================
+# 2. 排班核心邏輯
+# =====================================
+def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
+    schedule = {n: [""] * num_days for n in names}
+    work_count = {n: 0 for n in names}
 
+    # 填入預排與會議
+    for nurse in names:
+        for d in range(num_days):
+            if requests[nurse][d] in ["D", "E", "N", "M"]:
+                schedule[nurse][d] = requests[nurse][d]
+                work_count[nurse] += 1
+
+    # 滿足最低人力需求
+    for day in range(num_days):
+        for s in ["N", "E", "D"]:
+            min_req = manpower_req[day][f"{s}_min"]
+            current = sum(1 for n in names if schedule[n][day] == s)
+            candidates = [n for n in names if schedule[n][day] == "" and (s in permissions.get(n, "DEN"))]
+            for n in candidates[:max(0, min_req - current)]:
+                schedule[n][day] = s
+                work_count[n] += 1
+
+    # 🎯【核心優化】：強制確保休假天數 >= 8 天
+    for nurse in names:
+        if nurse not in PART_TIME_STAFFS:
+            off_days = sum(1 for d in range(num_days) if schedule[nurse][d] in ["", "off", "R"])
+            # 若少於 8 天，強行銷班還假
+            while off_days < 8:
+                for d in range(num_days):
+                    if schedule[nurse][d] in ["D", "E", "N"]:
+                        schedule[nurse][d] = "off"
+                        off_days += 1
+                        break
+                else: break
+
+    # 補滿空格
+    for n in names:
+        for d in range(num_days):
+            if schedule[n][d] == "": schedule[n][d] = "off"
+    return schedule
+
+# =====================================
+# 3. Streamlit UI 流程 (請保留您原有的上傳元件)
+# =====================================
+# (確保您的檔案讀取部分使用了 CORE_STAFF_NAMES)
 # =====================================
 # 2. 資料讀取函式
 # =====================================
