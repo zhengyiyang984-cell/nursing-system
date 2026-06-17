@@ -258,12 +258,37 @@ for _, row in config_df.iterrows():
     history_streak_final[name] = int(row["已連上天數"])
 
 manpower = []
-for _, row in manpower_df.iterrows():
+
+for d in range(num_days):
+
+    curr_date = start_date + datetime.timedelta(days=d)
+
+    week_no = curr_date.isocalendar()[1]
+
+    is_weekend = curr_date.weekday() in [5, 6]
+
+    label = (
+        f"第{week_no}週-假日"
+        if is_weekend
+        else f"第{week_no}週-平日"
+    )
+
+    selected = weekly_df[
+        weekly_df["週別"] == label
+    ].iloc[0]
+
     manpower.append({
-        "D_min": int(row["D_min"]), "D_max": int(row["D_max"]),
-        "E_min": int(row["E_min"]), "E_max": int(row["E_max"]),
-        "N_min": int(row["N_min"]), "N_max": int(row["N_max"]),
-    })
+
+        "D_min": int(selected["D_min"]),
+        "D_max": int(selected["D_max"]),
+
+        "E_min": int(selected["E_min"]),
+        "E_max": int(selected["E_max"]),
+
+        "N_min": int(selected["N_min"]),
+        "N_max": int(selected["N_max"]),
+
+    }))
 
 st.divider()
 run = st.button("🚀 啟動 AI 最佳化排班", type="primary", use_container_width=True)
