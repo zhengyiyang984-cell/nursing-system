@@ -132,6 +132,7 @@ class NurseScheduler:
         return self.manpower[day].get(f"{shift}_max", 999)
 
     # ---------- 排班步驟 ----------
+    
     def _apply_requests(self):
         for nurse in self.names:
             for day in range(self.days):
@@ -153,7 +154,7 @@ class NurseScheduler:
             if target == 0:
                 continue
             # 優先排 2~3 天塊狀 D，避免碎班
-            blocks = [3, 3, 2, 2, 1, 1]
+            blocks = [3, 3, 2, 2]
             self.random.shuffle(blocks)
             for block_len in blocks:
                 if target <= 0:
@@ -169,12 +170,18 @@ class NurseScheduler:
                         target -= length
                         break
             # 若還不足，單日補滿
-            for d in range(self.days):
-                if target <= 0:
-                    break
-                if self._can_assign(nurse, d, PARTTIME_ALLOWED_SHIFT, allow_overwrite_off=True):
-                    self.schedule[nurse][d] = PARTTIME_ALLOWED_SHIFT
-                    target -= 1
+           for d in range(self.days):
+    if target <= 0:
+        break
+
+    if self._can_assign(
+        nurse,
+        d,
+        PARTTIME_ALLOWED_SHIFT,
+        allow_overwrite_off=True
+    ):
+        self.schedule[nurse][d] = PARTTIME_ALLOWED_SHIFT
+        target -= 1
             # 多出的 D 優先取消非固定
             while sum(1 for x in self.schedule[nurse] if x == PARTTIME_ALLOWED_SHIFT) > PARTTIME_DAYS:
                 removed = False
