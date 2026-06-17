@@ -9,11 +9,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (全班別交叉救火完全體)",
+    page_title="2F護理排班系統 (剛性保底與警報完全體)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (全班別交叉救火・每日人力100%死守版)")
+st.title("🏥 2F護理排班系統 (剛性保底・自動缺失警報完全體)")
 
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
@@ -175,14 +175,14 @@ def can_work_shift(permission, shift):
     return shift in permission or "DEN" in permission
 
 # =====================================
-# 智慧排班引擎 (全班別交叉救火完全體)
+# 智慧排班引擎 (含剛性極限調度)
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
     night_count = {n: 0 for n in names}
     work_count = {n: 0 for n in names}
 
-    # 填入自行預排與會議
+    # STEP 1: 填入自行預排與會議
     for nurse in names:
         for d in range(num_days):
             if d < len(requests[nurse]) and requests[nurse][d] in ["M", "D", "E", "N"]:
@@ -283,7 +283,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             schedule[nurse][day] = "D"
             work_count[nurse] += 1
 
-    # STEP 5: 半職郭珍君精準 10 天塊狀限制鎖定段
+    # STEP 5: 半職郭珍君精準 10 天塊狀限制
     for nurse in PART_TIME_STAFFS:
         if nurse in names:
             target_blocks = [3, 3, 2, 2]
@@ -312,8 +312,8 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                         schedule[nurse][target_day] = "D"
                         allocated_days_indices.add(target_day)
 
-    # 🎯 STEP 5.5:【全班別大局交叉救火調節令】
-    # 全面打通白、小、大夜！只要當天任何人手少於最低需求，全面調配所有當天空格且符合安全規範的全職人員補滿！
+    # 🎯 STEP 5.5:【全班別交叉救火 - 剛性保底調度】
+    # 只要當天有任何班別未達最低要求，不計代價動用所有當天空格且符合安全防線的全職人員補滿
     for day in range(num_days):
         for shift_type in ["N", "E", "D"]:
             min_req = manpower_req[day][f"{shift_type}_min"]
@@ -324,8 +324,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 for nurse in names:
                     if nurse in PART_TIME_STAFFS: continue 
                     if schedule[nurse][day] != "": continue # 必須是空格
-                    
-                    # 🚀 解鎖所有全職同仁（包含DEN大局權限者）交叉互相救火
                     if not is_shift_safe(nurse, day, shift_type): continue
                     
                     has_neighbor = False
@@ -337,12 +335,12 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                     
                 if not possible_rescuers: break
                 
-                # 優先挑選可以串聯成連續班的人，避免製造碎班
+                # 優先選擇可以和前後串連成連續班的人
                 possible_rescuers.sort(key=lambda x: (1 if x[1] else 0, -sum(1 for s in schedule[x[0]] if s in ["D", "E", "N"])), reverse=True)
                 chosen_nurse = possible_rescuers[0][0]
                 schedule[chosen_nurse][day] = shift_type
                 
-                # 🚀 連帶補班防碎班：如果是跨班被抓過來上班，幫他前後看能不能連著上，消滅1天碎班
+                # 自動連帶補班防碎班
                 if day < num_days - 1 and schedule[chosen_nurse][day+1] == "" and is_shift_safe(chosen_nurse, day+1, shift_type):
                     schedule[chosen_nurse][day+1] = shift_type
                 elif day > 0 and schedule[chosen_nurse][day-1] == "" and is_shift_safe(chosen_nurse, day-1, shift_type):
@@ -359,11 +357,11 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 else:
                     schedule[nurse][d] = "off"
 
-    # STEP 7: 大局強制均勻平衡調節令（死守全職 8 天休假底線）
+    # STEP 7: 全職 8 天休假底線死守
     full_time_nurses = [n for n in names if n not in PART_TIME_STAFFS]
     for loop in range(5):
         current_works = {n: sum(1 for x in schedule[n] if x in ["D", "E", "N"]) for n in full_time_nurses}
-        overworked = [n for n in full_time_nurses if current_works[n] > 22] # 上超過 22 天代表假不足 8 天
+        overworked = [n for n in full_time_nurses if current_works[n] > 22] 
         
         if not overworked:
             break
@@ -483,7 +481,7 @@ if file_b:
 
         st.markdown("---")
         if st.button("🚀 啟動終極平衡自動排班系統", type="primary", use_container_width=True):
-            with st.spinner("全班別交叉救火優化中..."):
+            with st.spinner("全班別交叉救火與剛性保底計算中..."):
                 st.session_state["schedule_result"] = generate_schedule(names, permissions, requests, num_days, manpower_req_list, history_shift_final, history_streak_final)
                 st.session_state["run_success"] = True
 
@@ -512,6 +510,20 @@ if file_b:
             night_df = pd.DataFrame([[n, sum(1 for x in result[n] if x == "E"), sum(1 for x in result[n] if x == "N"), sum(1 for x in result[n] if x in ["E", "N"])] for n in names], columns=["姓名", "小夜(E)", "大夜(N)", "夜班總計"])
 
             issues = []
+            # 🚨 每日實際人力紅燈缺口智慧掃描
+            for d in range(num_days):
+                d_count = sum(1 for n in names if result[n][d] == "D")
+                e_count = sum(1 for n in names if result[n][d] == "E")
+                n_count = sum(1 for n in names if result[n][d] == "N")
+                
+                if d_count < manpower_req_list[d]['D_min']:
+                    issues.append(["🚨 人力短缺警報", f"【{date_headers[d]}】白班(D)目前僅有 {d_count} 人，未達最低要求 {manpower_req_list[d]['D_min']} 人！(當天剩餘總可用人數已見底，需人工微調同仁銷假或安排兼職支援)"])
+                if e_count < manpower_req_list[d]['E_min']:
+                    issues.append(["🚨 人力短缺警報", f"【{date_headers[d]}】小夜班(E)目前僅有 {e_count} 人，未達最低要求 {manpower_req_list[d]['E_min']} 人！(當天剩餘總可用人數已見底，需人工微調同仁銷假或安排兼職支援)"])
+                if n_count < manpower_req_list[d]['N_min']:
+                    issues.append(["🚨 人力短缺警報", f"【{date_headers[d]}】大夜班(N)目前僅有 {n_count} 人，未達最低要求 {manpower_req_list[d]['N_min']} 人！(當天剩餘總可用人數已見底，需人工微調同仁銷假或安排兼職支援)"])
+
+            # 個別人員常規規則檢查
             for nurse in names:
                 if nurse not in PART_TIME_STAFFS:
                     tot_holiday = sum(1 for x in result[nurse] if x in ["off", "R"])
@@ -530,14 +542,14 @@ if file_b:
                             issues.append([nurse, f"於 {date_headers[d-1]} 出現 1 天碎班（不符連續要求）"])
                         streak = 0
 
-            tabs = st.tabs(["📅 最終班表", "📊 每日實際人力", "🏖️ 休假統計", "🌙 夜班統計", "🔍 班表檢查"])
+            tabs = st.tabs(["📅 最終班表", "📊 每日實際人力", "🏖️ 休假統計", "🌙 夜班統計", "🔍 班表檢查與急救警報"])
             with tabs[0]: st.dataframe(schedule_df, use_container_width=True, height=500)
             with tabs[1]: st.dataframe(manpower_df, use_container_width=True)
             with tabs[2]: st.dataframe(holiday_df, use_container_width=True)
             with tabs[3]: st.dataframe(night_df, use_container_width=True)
             with tabs[4]:
-                if not issues: st.success("🎉 太棒了！全班別全面完成交叉自動調度，每日實際人力 100% 完美滿足！")
-                else: st.dataframe(pd.DataFrame(issues, columns=["姓名", "優化提醒"]), use_container_width=True)
+                if not issues: st.success("🎉 太棒了！每日實際人力、休假、碎班天數 100% 完美滿足！")
+                else: st.dataframe(pd.DataFrame(issues, columns=["對象 / 類別", "優化與急救警報提醒"]), use_container_width=True)
 
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
