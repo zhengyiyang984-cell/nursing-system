@@ -9,11 +9,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (半職雙鎖定完美完全體)",
+    page_title="2F護理排班系統 (極致靈活完全體)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (半職雙鎖定完美完全體)")
+st.title("🏥 2F護理排班系統 (消滅單天碎班・人力死守版)")
 
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
@@ -169,8 +169,14 @@ def load_history_only(upload_file, names):
         pass
     return history_shift, history_streak
 
+# 🎯【全新補回核心工具】用來辨識個人 DEN 權限的小幫手
+def can_work_shift(permission, shift):
+    if shift in ["R", "off", "M"]:
+        return True
+    return shift in permission
+
 # =====================================
-# 智慧排班引擎 (含半職雙重絕對鎖定大腦)
+# 智慧排班引擎 (極致完全體)
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
@@ -195,22 +201,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 curr_streak = 0
         return curr_streak
 
-    # 全職同仁連續性彈性導航加權 (2-4天為主)
-    def get_work_continuation_weight(nurse_name, day_idx):
-        streak = get_current_streak(nurse_name, day_idx)
-        if day_idx == 0:
-            has_worked = history_shift.get(nurse_name) in ["D", "E", "N"]
-        else:
-            has_worked = schedule[nurse_name][day_idx - 1] in ["D", "E", "N"]
-            
-        if not has_worked:
-            return 0
-        if streak >= 4:
-            return 2  
-        elif streak >= 2:
-            return 18 
-        return 12
-
     def is_shift_safe(nurse, day, shift_type):
         if get_current_streak(nurse, day) >= 5: return False
         if shift_type == "D":
@@ -225,6 +215,22 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             if day == 1 and history_shift.get(nurse) == "N" and schedule[nurse][0] != "N": return False
             if day > 1 and schedule[nurse][day-1] != "N" and schedule[nurse][day-2] == "N": return False
         return True
+
+    # 全職同仁連續性彈性導航加權 (1-5天靈活分配，2-4天為主)
+    def get_work_continuation_weight(nurse_name, day_idx):
+        streak = get_current_streak(nurse_name, day_idx)
+        if day_idx == 0:
+            has_worked = history_shift.get(nurse_name) in ["D", "E", "N"]
+        else:
+            has_worked = schedule[nurse_name][day_idx - 1] in ["D", "E", "N"]
+            
+        if not has_worked:
+            return 0
+        if streak >= 4:
+            return 2  
+        elif streak >= 2:
+            return 18 
+        return 12
 
     # STEP 2: 大夜班 (N) 常規輪派
     for day in range(num_days):
@@ -253,7 +259,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
         need_e = req_e_min - current_e
         if need_e <= 0: continue
 
-        candidates = [n for n in names if n not in PART_TIME_STAFFS and schedule[n][day] == "" and can_work_shift(permissions[n], "E") and is_shift_safe(n, day, "E")]
+        candidates = [n for n in names if n not in PART_TIME_STAFFS && schedule[n][day] == "" and can_work_shift(permissions[n], "E") and is_shift_safe(n, day, "E")]
         random.shuffle(candidates)
         candidates.sort(key=lambda x: (get_work_continuation_weight(x, day), -work_count[x]), reverse=True)
         
@@ -283,7 +289,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
     # 重新加鎖：限定當月「精準只能上 10 天」，且切割為「兩個連續3天、兩個連續2天」的塊狀，絕無單天碎班！
     for nurse in PART_TIME_STAFFS:
         if nurse in names:
-            # 3+3+2+2 = 剛好 10 天
             target_blocks = [3, 3, 2, 2]
             random.shuffle(target_blocks)
             allocated_days_indices = set()
@@ -291,7 +296,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             for b_len in target_blocks:
                 valid_starts = []
                 for start_d in range(num_days - b_len + 1):
-                    # 邊界安全隔離條款：半職各區塊之間必須有 off 隔開，不能黏在一起變成連5天或連6天
                     if start_d > 0 and (start_d - 1) in allocated_days_indices: continue
                     if (start_d + b_len) < num_days and (start_d + b_len) in allocated_days_indices: continue
                     
@@ -299,7 +303,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                     total_shortage = 0
                     for offset in range(b_len):
                         curr_day = start_d + offset
-                        # 兼職今天不能有預排、不能撞到開會M、也不能跟已經排好或預排的其他區塊重疊
                         if schedule[nurse][curr_day] != "" or curr_day in allocated_days_indices:
                             block_ok = False
                             break
@@ -307,7 +310,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                             block_ok = False
                             break
                         
-                        # 統計這幾天白班的缺人總數，把兼職優先投放到最缺人的連續日子
                         c_count = sum(1 for n in names if schedule[n][curr_day] == "D")
                         shortage = manpower_req[curr_day]["D_min"] - c_count
                         if shortage > 0:
@@ -334,15 +336,15 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             while current_count < min_req:
                 possible_rescuers = []
                 for nurse in names:
-                    if nurse in PART_TIME_STAFFS: continue # 郭珍君時數鎖死，不再參與救火
+                    if nurse in PART_TIME_STAFFS: continue 
                     if schedule[nurse][day] != "": continue
                     if not can_work_shift(permissions[nurse], shift_type): continue
                     if not is_shift_safe(nurse, day, shift_type): continue
                     
-                    # 預判連續天數，優先挑選可以串成連續班的全職同仁，消滅單天碎班
+                    # 預判鄰近上班狀態，優先挑選可以串成連續班的全職同仁，消滅單天碎班
                     has_neighbor = False
                     if day > 0 and schedule[nurse][day-1] in ["D", "E", "N"]: has_neighbor = True
-                    if day < num_days - 1 and schedule[nurse][day+1] in ["D", "E", "N"]: has_weekend = True
+                    if day < num_days - 1 and schedule[nurse][day+1] in ["D", "E", "N"]: has_neighbor = True
                     if day == 0 and history_shift.get(nurse) in ["D", "E", "N"]: has_neighbor = True
                     
                     possible_rescuers.append((nurse, has_neighbor))
@@ -531,7 +533,7 @@ if file_b:
             with tabs[2]: st.dataframe(holiday_df, use_container_width=True)
             with tabs[3]: st.dataframe(night_df, use_container_width=True)
             with tabs[4]:
-                if not issues: st.success("🎉 太棒了！兼職郭珍君精準鎖死10天且都是連續2-3天班；每日实际人力完美達標！")
+                if not issues: st.success("🎉 太棒了！兼職郭珍君精準鎖死10天且都是連續2-3天班；每日實際人力完美達標！")
                 else: st.dataframe(pd.DataFrame(issues, columns=["姓名", "優化提醒"]), use_container_width=True)
 
             output = BytesIO()
