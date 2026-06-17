@@ -9,11 +9,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (終極完全體)",
+    page_title="2F護理排班系統 (終極平衡完全體)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (消滅碎班・人力死守・名單完全對齊終極完全體)")
+st.title("🏥 2F護理排班系統 (消滅碎班・人力死守・休假平衡完美完全體)")
 
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
@@ -22,7 +22,7 @@ if "schedule_result" not in st.session_state:
 
 WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
 
-# 核心 14 人名單（完美對齊真實班表）
+# 核心 14 人名單（完美對齊真實舊班表）
 CORE_STAFF_NAMES = [
     "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
     "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
@@ -175,7 +175,7 @@ def can_work_shift(permission, shift):
     return shift in permission or "DEN" in permission
 
 # =====================================
-# 智慧排班引擎 (完全平衡完全體)
+# 智慧排班引擎 (含全島休假平準校正器)
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
@@ -334,7 +334,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                     for nurse in names:
                         if nurse in PART_TIME_STAFFS or schedule[nurse][day] != "": continue
                         iron_safe = True
-                        # 🎯【精準修復】：將原本最後面多出來的括號 ']' 移除，完全修正語法錯誤
                         if shift_type == "D" and day > 0 and schedule[nurse][day-1] in ["N", "E"]: iron_safe = False
                         if shift_type == "E" and day > 0 and schedule[nurse][day-1] == "N": iron_safe = False
                         if shift_type == "N" and day > 0 and schedule[nurse][day-1] in ["D", "E"]: iron_safe = False
@@ -365,8 +364,8 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
     # 🎯 STEP 7:【全職休假均勻平衡與全自動 1 天碎班清除引擎】
     full_time_nurses = [n for n in names if n not in PART_TIME_STAFFS]
     
-    # 階段一：強制召回所有假數不滿 8 天的全職同仁
-    for loop in range(10):
+    # 🎯【優化核心】：拉高休假平準化循環次數，並導入跨人班別轉移
+    for loop in range(15):
         current_holidays = {n: sum(1 for x in schedule[n] if x in ["off", "R"]) for n in full_time_nurses}
         under_rest = [n for n in full_time_nurses if current_holidays[n] < 8]
         if not under_rest: break
@@ -374,6 +373,8 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
         for d in range(num_days):
             for shift_type in ["D", "E", "N"]:
                 c_count = sum(1 for n in names if schedule[n][d] == shift_type)
+                
+                # 策略 A：如果當天原本的人數大於最低限度，直接無痛退班變 off，還假給林欣蓓、林怡微！
                 if c_count > manpower_req[d][f"{shift_type}_min"]:
                     under_rest.sort(key=lambda x: current_holidays[x])
                     for target_nurse in under_rest:
@@ -381,6 +382,23 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                             schedule[target_nurse][d] = "off"
                             current_holidays[target_nurse] += 1
                             break
+                    break
+                
+                # 🚀 策略 B：如果人數「剛好壓在最低限制」不能直接拿掉，則尋找有沒有假太多的人（休假天數 > 9天）可以出來頂替！
+                elif c_count == manpower_req[d][f"{shift_type}_min"]:
+                    under_rest.sort(key=lambda x: current_holidays[x])
+                    for target_nurse in under_rest:
+                        if schedule[target_nurse][d] == shift_type and (d < len(requests[target_nurse]) and requests[target_nurse][d] == ""):
+                            # 找出當天正在放假（off）且特飽水、假很多的人
+                            helpers = [n for n in full_time_nurses if schedule[n][d] == "off" and current_holidays[n] >= 9 and can_work_shift(permissions[n], shift_type) and is_shift_safe(n, d, shift_type)]
+                            if helpers:
+                                chosen_helper = random.choice(helpers)
+                                # 完美的跨人班別置換：林欣蓓/林怡微去休息，假很多的人過來頂班
+                                schedule[target_nurse][d] = "off"
+                                schedule[chosen_helper][d] = shift_type
+                                current_holidays[target_nurse] += 1
+                                current_holidays[chosen_helper] -= 1
+                                break
                     break
 
     # 階段二：全自動碎班相連抹除器（1天班自動抹平或靠攏串聯）
@@ -398,6 +416,8 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                     else:
                         if d < num_days - 1 and (d+1 < len(requests[n]) and requests[n][d+1] == "") and is_shift_safe(n, d+1, curr_shift):
                             schedule[n][d+1] = curr_shift
+                        elif d > 0 and (d-1 < len(requests[n]) and requests[n][d-1] == "") and is_shift_safe(n, d-1, curr_shift):
+                            schedule[n][d-1] = curr_shift
     return schedule
 
 # =====================================
@@ -500,7 +520,7 @@ if file_b:
 
         st.markdown("---")
         if st.button("🚀 啟動全智慧臨床優化平衡排班系統", type="primary", use_container_width=True):
-            with st.spinner("夜班權限權重平衡、全自動抹除1天碎班中..."):
+            with st.spinner("正在執行跨人班別移轉、召回林欣蓓與林怡微的8天法定假..."):
                 st.session_state["schedule_result"] = generate_schedule(names, permissions, requests, num_days, manpower_req_list, history_shift_final, history_streak_final)
                 st.session_state["run_success"] = True
 
@@ -566,7 +586,7 @@ if file_b:
             with tabs[2]: st.dataframe(holiday_df, use_container_width=True)
             with tabs[3]: st.dataframe(night_df, use_container_width=True)
             with tabs[4]:
-                if not issues: st.success("🎉 完美通關！全體 14 位同仁名單底牌完全與真實班表檔案對齊，大夜權重回歸正常！全月無碎班、無假別不足，全部 100% 綠燈達標！")
+                if not issues: st.success("🎉 終極綠燈降臨！林欣蓓、林怡微休假全數回歸大於等於 8 天，全月無碎班、人力完全達標，完美的最終大結局班表出爐！")
                 else: st.dataframe(pd.DataFrame(issues, columns=["對象 / 類別", "優化與急救警報提醒"]), use_container_width=True)
 
             output = BytesIO()
