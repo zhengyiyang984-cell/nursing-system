@@ -6,10 +6,14 @@ from config import *
 
 
 def safe_stdev(values):
+
     if len(values) <= 1:
         return 0
-    return statistics.pstdev(values)
 
+    try:
+        return statistics.pstdev(values)
+    except:
+        return 0
 
 def score_schedule(schedule, names, manpower, history_shift, requests):
     issues = validate_schedule(schedule, names, manpower, history_shift, requests)
