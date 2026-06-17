@@ -195,57 +195,94 @@ config_df = st.data_editor(
 
 st.subheader("📊 2. 每週人力上下限")
 
-weeks_setup = []
+weeks_map = {}
 
-current_week = 1
+weeks_setup_data = []
 
-for d in range(num_days):
+current_week_idx = 1
 
-    curr_date = start_date + datetime.timedelta(days=d)
+last_week_no = None
 
-    week_no = curr_date.isocalendar()[1]
+for i in range(num_days):
 
-    is_weekend = curr_date.weekday() in [5, 6]
+    curr = start_date + datetime.timedelta(days=i)
 
-    label = (
-        f"第{week_no}週-假日"
+    year, week_no, weekday_no = curr.isocalendar()
+
+    if last_week_no is not None and week_no != last_week_no:
+        current_week_idx += 1
+
+    last_week_no = week_no
+
+    is_weekend = curr.weekday() in [5, 6]
+
+    week_label = f"第 {current_week_idx} 週"
+
+    day_type_label = (
+        "假日(六日)"
         if is_weekend
-        else f"第{week_no}週-平日"
+        else "平日(一五)"
     )
 
-    if label not in [
-        x["週別"]
-        for x in weeks_setup
-    ]:
+    weeks_map[i] = {
+        "week_label": week_label,
+        "is_weekend": is_weekend
+    }
+
+    key = f"{week_label} - {day_type_label}"
+
+    exist = [
+        x["週別與平假日"]
+        for x in weeks_setup_data
+    ]
+
+    if key not in exist:
 
         if is_weekend:
 
-            weeks_setup.append({
-                "週別": label,
+            weeks_setup_data.append({
+                "週別與平假日": key,
+                "week_id": week_label,
+                "is_we": True,
+
                 "D_min": 3,
                 "D_max": 5,
+
                 "E_min": 2,
                 "E_max": 4,
+
                 "N_min": 2,
                 "N_max": 2
             })
 
         else:
 
-            weeks_setup.append({
-                "週別": label,
+            weeks_setup_data.append({
+                "週別與平假日": key,
+                "week_id": week_label,
+                "is_we": False,
+
                 "D_min": 4,
                 "D_max": 6,
+
                 "E_min": 3,
                 "E_max": 4,
+
                 "N_min": 2,
                 "N_max": 2
             })
 
 weekly_df = st.data_editor(
-    pd.DataFrame(weeks_setup),
+    pd.DataFrame(weeks_setup_data),
     use_container_width=True,
-    num_rows="fixed"
+    num_rows="fixed",
+    column_config={
+        "週別與平假日":
+        st.column_config.TextColumn(
+            "週別與平假日",
+            disabled=True
+        )
+    }
 )
 
 permissions = {}
@@ -261,20 +298,12 @@ manpower = []
 
 for d in range(num_days):
 
-    curr_date = start_date + datetime.timedelta(days=d)
-
-    week_no = curr_date.isocalendar()[1]
-
-    is_weekend = curr_date.weekday() in [5, 6]
-
-    label = (
-        f"第{week_no}週-假日"
-        if is_weekend
-        else f"第{week_no}週-平日"
-    )
+    info = weeks_map[d]
 
     selected = weekly_df[
-        weekly_df["週別"] == label
+        (weekly_df["week_id"] == info["week_label"])
+        &
+        (weekly_df["is_we"] == info["is_weekend"])
     ].iloc[0]
 
     manpower.append({
@@ -286,9 +315,9 @@ for d in range(num_days):
         "E_max": int(selected["E_max"]),
 
         "N_min": int(selected["N_min"]),
-        "N_max": int(selected["N_max"]),
+        "N_max": int(selected["N_max"])
 
-    }))
+    })
 
 st.divider()
 run = st.button("🚀 啟動 AI 最佳化排班", type="primary", use_container_width=True)
