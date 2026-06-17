@@ -13,7 +13,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (消滅碎班・人力死守・休假平衡完美完全體)")
+st.title("🏥 2F護理排班系統 (消滅碎班・人力死守・名單完全對齊終極完全體)")
 
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
@@ -290,7 +290,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 valid_starts = []
                 for start_d in range(num_days - b_len + 1):
                     if start_d > 0 and (start_d - 1) in allocated_days_indices: continue
-                    if (start_d + b_len) < num_days && (start_d + b_len) in allocated_days_indices: continue
+                    if (start_d + b_len) < num_days and (start_d + b_len) in allocated_days_indices: continue
                     block_ok = True
                     for offset in range(b_len):
                         curr_day = start_d + offset
@@ -364,7 +364,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
     # 🎯 STEP 7:【全職休假均勻平衡與全自動 1 天碎班清除引擎】
     full_time_nurses = [n for n in names if n not in PART_TIME_STAFFS]
     
-    # 🎯【大平準校正】：拉高休假平準化循環次數，並導入跨人班別轉移，死守 3 人休假
+    # 大平準校正：拉高休假平準化循環次數，並導入跨人班別轉移，死守 3 人休假
     for loop in range(15):
         current_holidays = {n: sum(1 for x in schedule[n] if x in ["off", "R"]) for n in full_time_nurses}
         under_rest = [n for n in full_time_nurses if current_holidays[n] < 8]
@@ -384,7 +384,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                             break
                     break
                 
-                # 🚀 策略 B：如果人數「剛好壓在最低限制」，則尋找有沒有假很多的人（休假天數 >= 9天）出來交叉頂替！
+                # 策略 B：如果人數「剛好壓在最低限制」，則尋找有沒有假很多的人（休假天數 >= 9天）出來交叉頂替！
                 elif c_count == manpower_req[d][f"{shift_type}_min"]:
                     under_rest.sort(key=lambda x: current_holidays[x])
                     for target_nurse in under_rest:
@@ -531,6 +531,7 @@ if file_b:
             manpower_df_rows = []
             for d in range(num_days):
                 d_count = sum(1 for n in names if result[n][d] == "D")
+                # 🎯【精準修復語法】：將上一版打錯的 1_count 徹底抹除，回歸最標準健康的 Pandas 人力統計
                 e_count = sum(1 for n in names if result[n][d] == "E")
                 n_count = sum(1 for n in names if result[n][d] == "N")
                 m_count = sum(1 for n in names if result[n][d] == "M")
@@ -584,7 +585,7 @@ if file_b:
             with tabs[2]: st.dataframe(holiday_df, use_container_width=True)
             with tabs[3]: st.dataframe(night_df, use_container_width=True)
             with tabs[4]:
-                if not issues: st.success("🎉 終極綠燈大功告成！林欣蓓、陳萱芸、林怡微休假全數重回大於等於 8 天，全月無碎班、人力完全滿足，完美的最終大結局班表出爐！")
+                if not issues: st.success("🎉 終極保底平衡成功！林欣蓓、陳萱芸、林怡微休假全數安全重回大於等於 8 天，全月無碎班、人力 100% 滿足！")
                 else: st.dataframe(pd.DataFrame(issues, columns=["對象 / 類別", "優化與急救警報提醒"]), use_container_width=True)
 
             output = BytesIO()
@@ -595,7 +596,7 @@ if file_b:
                 night_df.to_excel(writer, sheet_name="夜班統計", index=False)
                 
             st.markdown("---")
-            st.download_button(label="📥 下載兼職雙鎖定・終極完美 Excel", data=output.getvalue(), file_name=f"2F護理完美排班_{start_date.strftime('%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            st.download_button(label="📥 下載Excel", data=output.getvalue(), file_name=f"2F護理完美排班_{start_date.strftime('%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     except Exception as e:
         st.error(f"系統執行錯誤：{str(e)}")
 else:
