@@ -169,7 +169,6 @@ def load_history_only(upload_file, names):
         pass
     return history_shift, history_streak
 
-# 🎯【全新補回核心工具】用來辨識個人 DEN 權限的小幫手
 def can_work_shift(permission, shift):
     if shift in ["R", "off", "M"]:
         return True
@@ -250,7 +249,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             night_count[nurse] += 1
             work_count[nurse] += 1
 
-    # STEP 3: 小夜班 (E) 常規輪派
+    # STEP 3: 小夜班 (E) 常規輪派 —— 🎯【精準修復】將這裡手誤的 && 改回標準 Python 語法 and
     for day in range(num_days):
         req_e_min = manpower_req[day]["E_min"]
         req_e_max = manpower_req[day]["E_max"]
@@ -259,7 +258,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
         need_e = req_e_min - current_e
         if need_e <= 0: continue
 
-        candidates = [n for n in names if n not in PART_TIME_STAFFS && schedule[n][day] == "" and can_work_shift(permissions[n], "E") and is_shift_safe(n, day, "E")]
+        candidates = [n for n in names if n not in PART_TIME_STAFFS and schedule[n][day] == "" and can_work_shift(permissions[n], "E") and is_shift_safe(n, day, "E")]
         random.shuffle(candidates)
         candidates.sort(key=lambda x: (get_work_continuation_weight(x, day), -work_count[x]), reverse=True)
         
@@ -285,8 +284,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             schedule[nurse][day] = "D"
             work_count[nurse] += 1
 
-    # 🎯 STEP 5:【半職人員郭珍君 100% 鋼鐵鎖定防線】
-    # 重新加鎖：限定當月「精準只能上 10 天」，且切割為「兩個連續3天、兩個連續2天」的塊狀，絕無單天碎班！
+    # STEP 5: 半職郭珍君精準 10 天塊狀限制鎖定段
     for nurse in PART_TIME_STAFFS:
         if nurse in names:
             target_blocks = [3, 3, 2, 2]
@@ -326,8 +324,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                         schedule[nurse][target_day] = "D"
                         allocated_days_indices.add(target_day)
 
-    # 🎯 STEP 5.5:【全職常規最高權限剛性補洞引擎（不波及半職）】
-    # 100% 確保全院平假日人數完全達標，且全職在補洞時優先抓「能串成連續2-3天」的人！
+    # STEP 5.5: 全職大局剛性補人調節令（優先串聯 2-3 天）
     for day in range(num_days):
         for shift_type in ["N", "E", "D"]:
             min_req = manpower_req[day][f"{shift_type}_min"]
@@ -341,7 +338,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                     if not can_work_shift(permissions[nurse], shift_type): continue
                     if not is_shift_safe(nurse, day, shift_type): continue
                     
-                    # 預判鄰近上班狀態，優先挑選可以串成連續班的全職同仁，消滅單天碎班
                     has_neighbor = False
                     if day > 0 and schedule[nurse][day-1] in ["D", "E", "N"]: has_neighbor = True
                     if day < num_days - 1 and schedule[nurse][day+1] in ["D", "E", "N"]: has_neighbor = True
