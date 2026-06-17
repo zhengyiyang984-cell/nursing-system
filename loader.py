@@ -88,36 +88,114 @@ def load_request_and_permissions(upload_file, nurse_names, num_days):
     return requests, permissions
 
 
-def load_history_only(upload_file, nurse_names):
-    history_shift = {n: SHIFT_OFF for n in nurse_names}
-    history_streak = {n: 0 for n in nurse_names}
+def load_history_and_permission(upload_file, nurse_names):
+
+    history_shift = {
+        n: "off"
+        for n in nurse_names
+    }
+
+    history_streak = {
+        n: 0
+        for n in nurse_names
+    }
+
+    permissions = {
+        n: "DEN"
+        for n in nurse_names
+    }
 
     if upload_file is None:
-        return history_shift, history_streak
+        return (
+            history_shift,
+            history_streak,
+            permissions
+        )
 
-    df = read_excel_any(upload_file)
+    df = pd.read_excel(
+        upload_file,
+        header=None
+    )
+
     for _, row in df.iterrows():
-        raw_values = list(row.values)
-        nurse = find_nurse_in_row(raw_values, nurse_names)
-        if not nurse:
+
+        row_data = [
+            str(x).strip()
+            if pd.notna(x)
+            else ""
+            for x in row
+        ]
+
+        target = None
+
+        for nurse in nurse_names:
+
+            if nurse in row_data:
+
+                target = nurse
+                break
+
+        if target is None:
             continue
 
         shifts = []
-        for v in raw_values:
-            s = normalize_shift(v)
-            if s in ALL_SHIFTS:
-                shifts.append(s)
+
+        for cell in row_data:
+
+            if cell in [
+                "D",
+                "E",
+                "N",
+                "M",
+                "R",
+                "off"
+            ]:
+                shifts.append(cell)
 
         if not shifts:
             continue
 
-        history_shift[nurse] = shifts[-1]
+        # 最後班
+        history_shift[target] = shifts[-1]
+
+        # 連班
         streak = 0
+
         for s in reversed(shifts):
-            if s in CLINICAL_SHIFTS or s == SHIFT_M:
+
+            if s in [
+                "D",
+                "E",
+                "N",
+                "M"
+            ]:
                 streak += 1
             else:
                 break
-        history_streak[nurse] = streak
 
-    return history_shift, history_streak
+        history_streak[target] = streak
+
+        # 自動推權限
+        has_d = "D" in shifts
+        has_e = "E" in shifts
+        has_n = "N" in shifts
+
+        perm = ""
+
+        if has_d:
+            perm += "D"
+
+        if has_e:
+            perm += "E"
+
+        if has_n:
+            perm += "N"
+
+        if perm:
+            permissions[target] = perm
+
+    return (
+        history_shift,
+        history_streak,
+        permissions
+    )
