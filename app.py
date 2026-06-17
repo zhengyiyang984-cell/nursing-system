@@ -5,10 +5,13 @@ import validator
 
 st.title("🏥 2F 護理排班系統雛型")
 
-uploaded_file = st.file_uploader("上傳你的排班表 (CSV)", type="csv")
+# app.py (修改這一段)
+uploaded_file = st.file_uploader("上傳你的排班表 (Excel)", type=["xlsx"])
 
 if uploaded_file:
+    # 這裡會自動處理 .xlsx 檔案
     df = loader.load_data(uploaded_file)
+    # ... 後續程式碼不變
     st.write("### 目前排班表", df)
     
     st.write("### 兼職人員檢查 (上限 10 天)")
