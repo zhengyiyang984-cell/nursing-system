@@ -241,6 +241,9 @@ class NurseScheduler:
             while self._shift_count(day, shift) < self._min_req(day, shift):
                 candidates = []
                 for nurse in self.names:
+
+    if nurse in PART_TIME:
+        continue
                     if self._can_assign(nurse, day, shift, allow_overwrite_off=True):
                         candidates.append(nurse)
                 if not candidates:
