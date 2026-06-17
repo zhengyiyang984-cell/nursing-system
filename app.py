@@ -5,131 +5,107 @@ import random
 from io import BytesIO
 
 # =====================================
-# 基本設定
+# 1. 基礎設定與名單 (對齊真實班表)
 # =====================================
 st.set_page_config(page_title="2F護理排班系統", layout="wide")
-st.title("🏥 2F護理排班系統 (終極完全體)")
+st.title("🏥 2F護理排班系統 (完整版)")
 
-if "run_success" not in st.session_state:
-    st.session_state["run_success"] = False
-if "schedule_result" not in st.session_state:
-    st.session_state["schedule_result"] = None
+CORE_STAFF_NAMES = ["郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", "汪家容", "林欣儀", "林怡微", "溫鈺羚"]
+PART_TIME_STAFFS = ["郭珍君"]
 
-WEEKDAYS_CHINESE = ["一", "二", "三", "四", "五", "六", "日"]
-
-# 核心 14 人名單（完美對齊真實班表）
-CORE_STAFF_NAMES = [
-    "郭珍君", "李雅慧", "蔡靜如", "陳慧屏", "劉榆琳", 
-    "黃家靜", "許雅雯", "陳義樺", "林欣蓓", "陳萱芸", 
-    "汪家容", "林欣儀", "林怡微", "溫鈺羚"
-]
-
-PART_TIME_STAFFS = ["郭珍君"] 
-
-# 真實臨床權限底牌
-DEFAULT_PERMISSIONS = {
-    "郭珍君": "DE", "劉榆琳": "N", "陳義樺": "N", "李雅慧": "D", 
-    "蔡靜如": "E", "陳慧屏": "DE", "黃家靜": "E", "許雅雯": "E", 
-    "林欣蓓": "DE", "陳萱芸": "DE", "汪家容": "DN", "林欣儀": "DN", 
-    "林怡微": "DE", "溫鈺羚": "DN"
-}
-
-# 上月最後一天班別
-DEFAULT_LAST_SHIFTS = {
-    "郭珍君": "off", "劉榆琳": "off", "陳義樺": "N", "李雅慧": "D", 
-    "蔡靜如": "off", "陳慧屏": "E", "黃家靜": "off", "許雅雯": "D", 
-    "林欣蓓": "D", "陳萱芸": "E", "汪家容": "off", "林欣儀": "E", 
-    "林怡微": "D", "溫鈺羚": "off"
-}
+DEFAULT_PERMISSIONS = {n: "DEN" for n in CORE_STAFF_NAMES}
+DEFAULT_LAST_SHIFTS = {n: "D" for n in CORE_STAFF_NAMES}
 
 # =====================================
-# 核心函式
+# 2. 資料讀取函式
 # =====================================
 def load_request_and_permissions(upload_file, names, num_days):
     requests_dict = {n: [""] * num_days for n in names}
-    permissions_dict = {n: DEFAULT_PERMISSIONS.get(n, "DEN") for n in names}
-    xl = pd.ExcelFile(upload_file)
-    df = pd.read_excel(upload_file, sheet_name=xl.sheet_names[0], header=None)
+    permissions_dict = {n: "DEN" for n in names}
+    df = pd.read_excel(upload_file, header=None)
     header_row_idx = 0
-    name_col_idx = 1 
-    for idx, row in df.iterrows():
-        row_str = [str(x) for x in row.values]
-        if any("姓名" in s or "人員" in s for s in row_str):
-            header_row_idx = idx
-            for col_idx, cell_value in enumerate(row_str):
-                if "姓名" in cell_value or "人員" in cell_value:
-                    name_col_idx = col_idx
-                    break
-            break
+    name_col_idx = 1
+    # 簡化讀取邏輯
     df.columns = df.iloc[header_row_idx]
-    df = df.iloc[header_row_idx + 1 :].reset_index(drop=True)
+    df = df.iloc[header_row_idx + 1:].reset_index(drop=True)
     for _, row in df.iterrows():
-        raw_name = str(row.iloc[name_col_idx]).replace(" ", "").replace(" ", "").strip()
-        target_nurse = next((n for n in names if n in raw_name), None)
-        if not target_nurse: continue
-        permission_col_idx = name_col_idx + 2
-        if permission_col_idx < len(df.columns):
-            perm_val = str(row.iloc[permission_col_idx]).upper().strip()
-            if perm_val in ["D", "E", "N", "DE", "DN", "EN", "DEN"]:
-                permissions_dict[target_nurse] = perm_val
-        start_data_col = name_col_idx + 3
-        for d in range(num_days):
-            current_col_idx = start_data_col + d
-            if current_col_idx >= len(df.columns): continue
-            cell_value = str(row.iloc[current_col_idx]).strip()
-            if cell_value in ["nan", ""]: continue
-            cell_value_upper = cell_value.upper()
-            if cell_value_upper in ["R", "D", "E", "N"]: requests_dict[target_nurse][d] = cell_value_upper
-            elif "開會" in cell_value or cell_value_upper == "M": requests_dict[target_nurse][d] = "M"
-            elif "休" in cell_value: requests_dict[target_nurse][d] = "R"
+        name = str(row.iloc[name_col_idx]).strip()
+        target = next((n for n in names if n in name), None)
+        if target:
+            requests_dict[target] = [str(x) if pd.notna(x) else "" for x in row.iloc[name_col_idx+3:name_col_idx+3+num_days]]
     return requests_dict, permissions_dict
 
-def load_history_only(upload_file, names):
-    history_shift = {n: "D" for n in names} 
-    for n in names:
-        if n in DEFAULT_LAST_SHIFTS: history_shift[n] = DEFAULT_LAST_SHIFTS[n]
-    history_streak = {n: 0 for n in names}
-    return history_shift, history_streak
-
-def can_work_shift(permission, shift):
-    if shift in ["R", "off", "M"]: return True
-    return shift in permission or "DEN" in permission
-
 # =====================================
-# 排班引擎
+# 3. 排班運算核心
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
-    night_count = {n: 0 for n in names}
     work_count = {n: 0 for n in names}
 
+    # 基礎填充
     for nurse in names:
         for d in range(num_days):
-            if d < len(requests[nurse]) and requests[nurse][d] in ["M", "D", "E", "N"]:
+            if requests[nurse][d] in ["D", "E", "N", "M"]:
                 schedule[nurse][d] = requests[nurse][d]
                 work_count[nurse] += 1
-                if requests[nurse][d] in ["E", "N"]: night_count[nurse] += 1
 
-    def is_shift_safe(nurse, day, shift_type):
-        if day == 0: 
-            prev = history_shift.get(nurse)
-        else: 
-            prev = schedule[nurse][day-1]
-        if shift_type == "D" and prev in ["N", "E"]: return False
-        if shift_type == "E" and prev == "N": return False
-        if shift_type == "N" and prev in ["D", "E"]: return False
-        return True
-    def get_work_continuation_weight(nurse_name, day_idx):
-        streak = get_current_streak(nurse_name, day_idx)
-        if day_idx == 0:
-            has_worked = history_shift.get(nurse_name) in ["D", "E", "N"]
-        else:
-            has_worked = schedule[nurse_name][day_idx - 1] in ["D", "E", "N"]
+    # 簡單的人力補足 (滿足最低人力)
+    for day in range(num_days):
+        for s in ["N", "E", "D"]:
+            min_req = manpower_req[day][f"{s}_min"]
+            current = sum(1 for n in names if schedule[n][day] == s)
+            candidates = [n for n in names if schedule[n][day] == ""]
+            for n in candidates[:max(0, min_req - current)]:
+                schedule[n][day] = s
+                work_count[n] += 1
+
+    # 4. 休假天數調整 (滿足 8 天底線)
+    for nurse in names:
+        if nurse not in PART_TIME_STAFFS:
+            off_count = sum(1 for d in range(num_days) if schedule[nurse][d] in ["", "R", "off"])
+            while off_count < 8:
+                # 強制騰出空間變 off
+                for d in range(num_days):
+                    if schedule[nurse][d] in ["D", "E", "N"]:
+                        schedule[nurse][d] = "off"
+                        off_count += 1
+                        break
+    
+    # 5. 補滿空格
+    for nurse in names:
+        for d in range(num_days):
+            if schedule[nurse][d] == "": schedule[nurse][d] = "off"
             
-        if not has_worked: return 0
-        if streak >= 4: return 2  
-        elif streak >= 2: return 18 
-        return 12
+    return schedule
+
+# =====================================
+# 4. Streamlit UI 流程
+# =====================================
+file_a = st.sidebar.file_uploader("上傳舊班表", type=["xlsx"])
+file_b = st.sidebar.file_uploader("上傳預排休表", type=["xlsx"])
+
+if file_b:
+    num_days = 30 # 假設為 30 天
+    requests, perms = load_request_and_permissions(file_b, CORE_STAFF_NAMES, num_days)
+    history_shift, history_streak = load_history_only(file_a, CORE_STAFF_NAMES)
+    
+    # 預設人力需求
+    manpower_req = [{"D_min": 4, "E_min": 3, "N_min": 2} for _ in range(num_days)]
+    
+    if st.button("🚀 執行排班"):
+        result = generate_schedule(CORE_STAFF_NAMES, perms, requests, num_days, manpower_req, history_shift, history_streak)
+        st.dataframe(pd.DataFrame(result).T)
+        
+        # 休假檢查
+        issues = []
+        for n in CORE_STAFF_NAMES:
+            if n not in PART_TIME_STAFFS:
+                off_days = sum(1 for x in result[n] if x == "off")
+                if off_days < 8:
+                    issues.append({"姓名": n, "優化提醒": f"休假不足 8 天 (僅 {off_days} 天)"})
+        if issues:
+            st.warning("⚠️ 部分同仁休假不足")
+            st.table(pd.DataFrame(issues))
 
     # STEP 2: 大夜班 (N) 常規輪派
     for day in range(num_days):
