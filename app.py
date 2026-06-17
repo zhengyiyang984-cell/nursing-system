@@ -10,11 +10,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (休假平均調度完全體)",
+    page_title="2F護理排班系統 (人力完美死守版)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (休假平均調度完全體)")
+st.title("🏥 2F護理排班系統 (人力完美死守版)")
 
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
@@ -180,7 +180,7 @@ def load_history_only(upload_file, names):
     return history_shift, history_streak
 
 # =====================================
-# 智慧排班引擎 (含全職休假動態平衡大腦)
+# 智慧排班引擎 (人力絕對滿足死守完全體)
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
@@ -204,7 +204,6 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 curr_streak = 0
         return curr_streak
 
-    # 彈性積班動態導航
     def get_work_continuation_weight(nurse_name, day_idx):
         streak = get_current_streak(nurse_name, day_idx)
         if day_idx == 0:
@@ -214,11 +213,10 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             
         if not has_worked:
             return 0
-            
         if streak >= 4:
-            return 2  # 已連 4 天，大幅壓低權重引導其走向休假
+            return 2  
         elif streak >= 2:
-            return 18 # 連 2-3 天是最舒適的區塊，維持高積班誘因
+            return 18 
         return 12
 
     # STEP 2: 大夜班 (N) 分配
@@ -242,29 +240,23 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 continue
             if not can_work_shift(permissions[nurse], "N"):
                 continue
-                
             if get_current_streak(nurse, day) >= 5:
                 continue
                 
-            # 大夜下班連休 2 天過濾
             if day == 1 and history_shift.get(nurse) == "N" and schedule[nurse][0] != "N":
                 continue
             if day > 1:
                 if schedule[nurse][day - 1] != "N" and schedule[nurse][day - 2] == "N":
                     continue
-                if day > 2 and schedule[nurse][day - 1] != "N" and schedule[nurse][day - 2] != "N" and schedule[nurse][day - 3] == "N":
-                    if schedule[nurse][day - 2] == "off" or schedule[nurse][day - 2] == "R":
-                        pass 
                 
             candidates.append(nurse)
 
         random.shuffle(candidates)
-        # 🎯【休假平衡配套】：在選大夜班人選時，除了考慮積班，同時考慮總工作天數（讓上個月或前半月上班太少的人優先頂班）
         candidates.sort(
             key=lambda x: (
                 25 if (day > 0 and schedule[x][day - 1] == "N") or (day == 0 and history_shift.get(x) == "N") else 0,
                 get_work_continuation_weight(x, day),
-                -work_count[x], # 總上班數越少的人越優先（平衡休假）
+                -work_count[x], 
                 -night_count[x]
             ), 
             reverse=True
@@ -297,11 +289,9 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 continue
             if not can_work_shift(permissions[nurse], "E"):
                 continue
-                
             if get_current_streak(nurse, day) >= 5:
                 continue
                 
-            # 大夜下班連休 2 天防呆
             if day == 0 and history_shift.get(nurse) == "N":
                 continue
             if day == 1 and (schedule[nurse][0] == "N" or history_shift.get(nurse) == "N"):
@@ -318,15 +308,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                         candidates.append(nurse)
 
         random.shuffle(candidates)
-        # 🎯【休假平衡配套】：總工作數越少者，越優先填補小夜班
-        candidates.sort(
-            key=lambda x: (
-                get_work_continuation_weight(x, day),
-                -work_count[x], 
-                night_count[x]
-            ),
-            reverse=True
-        )
+        candidates.sort(key=lambda x: (get_work_continuation_weight(x, day), -work_count[x], night_count[x]), reverse=True)
 
         allowed_e_to_add = min(need_e, req_e_max - current_e)
         for nurse in candidates[:allowed_e_to_add]:
@@ -354,19 +336,15 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                     continue
                 if not can_work_shift(permissions[nurse], "D"):
                     continue
-                    
                 if get_current_streak(nurse, day) >= 5:
                     continue
                     
-                # 大夜連休 2 天限制
                 if day == 0 and history_shift.get(nurse) == "N":
                     continue
                 if day == 1 and (schedule[nurse][0] == "N" or history_shift.get(nurse) == "N"):
                     continue
                 if day > 1 and (schedule[nurse][day - 1] == "N" or schedule[nurse][day - 2] == "N"):
                     continue
-                    
-                # 小夜不接白班（E不接D）
                 if day == 0 and history_shift.get(nurse) == "E":
                     continue
                 if day > 0 and schedule[nurse][day - 1] == "E":
@@ -377,43 +355,10 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 candidates.append(nurse)
 
             random.shuffle(candidates)
-            # 🎯【休假平衡配套】：白班是填補人數的大宗，在此極大化導入「讓上班天數少的人出來上班」的權重
             candidates.sort(key=lambda x: (get_work_continuation_weight(x, day), -work_count[x]), reverse=True)
 
             allowed_d_to_add = min(need_d, req_d_max - current_d)
             for nurse in candidates[:allowed_d_to_add]:
-                schedule[nurse][day] = "D"
-                work_count[nurse] += 1
-
-        # 第二輪強力救火
-        current_d = sum(1 for n in names if schedule[n][day] == "D")
-        need_d = req_d_min - current_d
-        if need_d > 0 and current_d < req_d_max:
-            backup_candidates = []
-            for nurse in names:
-                if nurse in PART_TIME_STAFFS:
-                    continue
-                if schedule[nurse][day] != "":
-                    continue
-                if not can_work_shift(permissions[nurse], "D"):
-                    continue
-                if get_current_streak(nurse, day) >= 5:
-                    continue
-                    
-                if day == 0 and history_shift.get(nurse) in ["N", "E"]:
-                    continue
-                if day == 1 and (schedule[nurse][0] == "N" or history_shift.get(nurse) == "N" or schedule[nurse][0] == "E"):
-                    continue
-                if day > 1 and (schedule[nurse][day - 1] == "N" or schedule[nurse][day - 2] == "N" or schedule[nurse][day - 1] == "E"):
-                    continue
-                    
-                backup_candidates.append(nurse)
-            
-            random.shuffle(backup_candidates)
-            backup_candidates.sort(key=lambda x: (get_work_continuation_weight(x, day), -work_count[x]), reverse=True)
-            
-            allowed_d_to_add = min(need_d, req_d_max - current_d)
-            for nurse in backup_candidates[:allowed_d_to_add]:
                 schedule[nurse][day] = "D"
                 work_count[nurse] += 1
 
@@ -463,7 +408,56 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                         schedule[nurse][target_day] = "D"
                         allocated_days_indices.add(target_day)
 
-    # STEP 6: 暫時將剩餘空格全部補 off
+    # 🎯【核心戰略升級：STEP 5.5 最高權限剛性補洞引擎】
+    # 當前面所有的常規流程走完後，系統會再次全面覆查，強行把「不夠人」的窟窿在安全範圍內完美補滿
+    for day in range(num_days):
+        for shift_type in ["N", "E", "D"]:
+            min_req = manpower_req[day][f"{shift_type}_min"]
+            max_req = manpower_req[day].get(f"{shift_type}_max", min_req)
+            
+            current_count = sum(1 for n in names if schedule[n][day] == shift_type)
+            
+            # 如果發現人數比你設定的最低需求還要少，啟動剛性徵調令
+            while current_count < min_req:
+                possible_rescuers = []
+                for nurse in names:
+                    if nurse in PART_TIME_STAFFS and shift_type != "D": 
+                        continue # 兼職不上夜班
+                    if schedule[nurse][day] != "": 
+                        continue # 當天有排班或預排假
+                    if not can_work_shift(permissions[nurse], shift_type): 
+                        continue # 沒這班別的權限
+                        
+                    # 臨床鐵血安全防線把關
+                    is_safe = True
+                    if get_current_streak(nurse, day) >= 5: is_safe = False
+                    
+                    if shift_type == "D": # 排白班的防呆
+                        if day == 0 and history_shift.get(nurse) in ["N", "E"]: is_safe = False
+                        if day == 1 and (schedule[nurse][0] == "N" or history_shift.get(nurse) == "N" or schedule[nurse][0] == "E"): is_safe = False
+                        if day > 1 and (schedule[nurse][day-1] == "N" or schedule[nurse][day-2] == "N" or schedule[nurse][day-1] == "E"): is_safe = False
+                    elif shift_type == "E": # 排小夜的防呆
+                        if day == 0 and history_shift.get(nurse) == "N": is_safe = False
+                        if day == 1 and (schedule[nurse][0] == "N" or history_shift.get(nurse) == "N"): is_safe = False
+                        if day > 1 and (schedule[nurse][day-1] == "N" or schedule[nurse][day-2] == "N"): is_safe = False
+                    elif shift_type == "N": # 排大夜的防呆
+                        if day == 1 and history_shift.get(nurse) == "N" and schedule[nurse][0] != "N": is_safe = False
+                        if day > 1 and schedule[nurse][day-1] != "N" and schedule[nurse][day-2] == "N": is_safe = False
+                        
+                    if is_safe:
+                        possible_rescuers.append(nurse)
+                        
+                if not possible_rescuers:
+                    break # 全員死鎖，直接跳出防當機
+                    
+                # 挑選目前工作天數最少、假放最多的人回來上班
+                possible_rescuers.sort(key=lambda x: sum(1 for s in schedule[x] if s in ["D", "E", "N"]))
+                chosen_one = possible_rescuers[0]
+                
+                schedule[chosen_one][day] = shift_type
+                current_count += 1
+
+    # STEP 6: 空格補 off
     for nurse in names:
         for d in range(num_days):
             if schedule[nurse][d] == "":
@@ -472,80 +466,29 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 else:
                     schedule[nurse][d] = "off"
 
-    # 🎯 STEP 7:【全新大腦升級：全職休假精準雙向強制平均化防線】
-    # 計算全月理想上班天數 (以 30 天月休 9 天為例，正常上班數約為 21 天)
-    # 這裡系統會自動計算出全體全職人員此時此刻的平均上班天數，作為錨定基準點
+    # STEP 7: 全職休假多退少補與動態均勻平準大腦
     full_time_nurses = [n for n in names if n not in PART_TIME_STAFFS]
-    
-    # 進行多輪反覆調節，直到沒有人出現極端休假為止
-    for loop in range(5):
-        # 重新計算各全職同仁最新的工作總天數
+    for loop in range(4):
         current_works = {n: sum(1 for x in schedule[n] if x in ["D", "E", "N"]) for n in full_time_nurses}
         avg_work_target = sum(current_works.values()) // len(full_time_nurses)
         
-        # 1. 抓出「假太少、上班上太多」的過勞乾股 (上班天數高於平均值)
         overworked_nurses = [n for n in full_time_nurses if current_works[n] > avg_work_target + 1]
-        # 2. 抓出「假太多、沒班可上」的極端乾股 (上班天數低於平均值)
         underworked_nurses = [n for n in full_time_nurses if current_works[n] < avg_work_target - 1]
         
         if not overworked_nurses and not underworked_nurses:
-            break # 大家都已經完全平均在黃金中線，提早功德圓滿退出
+            break
             
-        # 巡邏每一天，進行「班別內部精準移轉與銷假」
         for d in range(num_days):
-            # 優先權處理：如果今天某個「假太多」的人剛好放 off，且今天白班人數還沒衝破最高上限(D_max)
-            # 系統會強制命令她出來改上白班！讓她的假變少，回歸平均值！
-            current_d_on_day = sum(1 for n in names if schedule[n][d] == "D")
-            if current_d_on_day < manpower_req[d]["D_max"]:
-                underworked_nurses.sort(key=lambda x: current_works[x])
-                for u_nurse in underworked_nurses:
-                    if schedule[u_nurse][d] == "off" and (d < len(requests[u_nurse]) and requests[u_nurse][d] == ""):
-                        # 核心接班安全檢查：必須符合 E不接D 與 大夜連休2天 新規
-                        safe_to_work = True
-                        if d == 0 and history_shift.get(u_nurse) in ["N", "E"]: safe_to_work = False
-                        if d == 1 and (schedule[u_nurse][0] == "N" or history_shift.get(u_nurse) == "N" or schedule[u_nurse][0] == "E"): safe_to_work = False
-                        if d > 1 and (schedule[u_nurse][day - 1] == "N" or schedule[u_nurse][day - 2] == "N" or schedule[u_nurse][day - 1] == "E"): safe_to_work = False
-                        if get_current_streak(u_nurse, d) >= 5: safe_to_work = False
-                        
-                        if safe_to_work:
-                            schedule[u_nurse][d] = "D"
-                            current_works[u_nurse] += 1
-                            break # 這天塞給她了，換下一天
-                            
-            # 反向處理：如果今天白班人數超出了最低需求(D_min)，且剛好有「過勞、班太多」的人在上班
-            # 系統強制把她的白班退掉，直接換成 off 送她回家休息，迅速拉高她的休假天數！
-            current_d_on_day = sum(1 for n in names if schedule[n][d] == "D")
-            if current_d_on_day > manpower_req[d]["D_min"]:
-                overworked_nurses.sort(key=lambda x: current_works[x], reverse=True)
-                for o_nurse in overworked_nurses:
-                    if schedule[o_nurse][d] == "D" and (d < len(requests[o_nurse]) and requests[o_nurse][d] == ""):
-                        schedule[o_nurse][d] = "off"
-                        current_works[o_nurse] -= 1
-                        break
-
-    # STEP 8: 每週一休與連 5 防呆
-    for nurse in names:
-        for start in range(0, num_days, 7):
-            end = min(start + 7, num_days)
-            week = schedule[nurse][start:end]
-            has_rest = any(x in ["off", "R"] for x in week)
-            if not has_rest and (end - 1) < num_days:
-                if (end - 1) < len(requests[nurse]) and requests[nurse][end - 1] not in ["M", "R"]:
-                    if (end - 1) not in PART_TIME_STAFFS: 
-                        schedule[nurse][end - 1] = "off"
-
-    for nurse in names:
-        streak = history_streak.get(nurse, 0)
-        for d in range(num_days):
-            if schedule[nurse][d] in ["D", "E", "N"]:
-                streak += 1
-            else:
-                streak = 0
-            if streak > 5:
-                if d < len(requests[nurse]) and requests[nurse][d] not in ["R", "M"]:
-                    if nurse not in PART_TIME_STAFFS:
-                        schedule[nurse][d] = "off"
-                streak = 0
+            # 退班（假太少的人）：必須確保退班後，該班別不會跌破自訂的最低人數！
+            for shift_type in ["D", "E", "N"]:
+                current_shift_count = sum(1 for n in names if schedule[n][d] == shift_type)
+                if current_shift_count > manpower_req[d][f"{shift_type}_min"]:
+                    overworked_nurses.sort(key=lambda x: current_works[x], reverse=True)
+                    for o_nurse in overworked_nurses:
+                        if schedule[o_nurse][d] == shift_type and (d < len(requests[o_nurse]) and requests[o_nurse][d] == ""):
+                            schedule[o_nurse][d] = "off"
+                            current_works[o_nurse] -= 1
+                            break
 
     return schedule
 
