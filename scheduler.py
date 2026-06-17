@@ -210,7 +210,7 @@ class NurseScheduler:
         return candidates
 
     def _can_place_night_block(self, nurse, start_day):
-        if start_day + 1 >= self.days:
+        if start_day >= self.days:
             return False
         # N,N
         for d in [start_day, start_day + 1]:
@@ -296,6 +296,8 @@ class NurseScheduler:
                                 break
                             self.random.shuffle(candidates)
                             candidates.sort(key=lambda n: self._candidate_score(n, day, shift), reverse=True)
+                            if shift == SHIFT_N:
+                                break
                             self.schedule[candidates[0]][day] = shift
                             changed = True
             if not changed:
