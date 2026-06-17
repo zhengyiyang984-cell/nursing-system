@@ -22,3 +22,15 @@ if uploaded_file:
             st.error(f"⚠️ {staff}: 已排 {count} 天 (超出限制)")
         else:
             st.success(f"✅ {staff}: 已排 {count} 天")
+# app.py 片段範例
+from validator import ScheduleValidator
+
+# 假設 df 是你讀進來的班表
+v = ScheduleValidator(df)
+errors = v.validate_rules()
+
+if errors:
+    for err in errors:
+        st.error(f"⚠️ 規則衝突: {err}")
+else:
+    st.success("✅ 排班表完全符合所有規定！")
