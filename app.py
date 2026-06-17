@@ -9,11 +9,11 @@ from io import BytesIO
 # =====================================
 
 st.set_page_config(
-    page_title="2F護理排班系統 (大局救火完全體)",
+    page_title="2F護理排班系統 (全班別交叉救火完全體)",
     layout="wide"
 )
 
-st.title("🏥 2F護理排班系統 (大夜全面救火・人力死守版)")
+st.title("🏥 2F護理排班系統 (全班別交叉救火・每日人力100%死守版)")
 
 if "run_success" not in st.session_state:
     st.session_state["run_success"] = False
@@ -175,7 +175,7 @@ def can_work_shift(permission, shift):
     return shift in permission or "DEN" in permission
 
 # =====================================
-# 智慧排班引擎 (大夜全面解鎖救火版)
+# 智慧排班引擎 (全班別交叉救火完全體)
 # =====================================
 def generate_schedule(names, permissions, requests, num_days, manpower_req, history_shift, history_streak):
     schedule = {n: [""] * num_days for n in names}
@@ -211,7 +211,7 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
             if day == 1 and (schedule[nurse][0] == "N" or history_shift.get(nurse) == "N"): return False
             if day > 1 and (schedule[nurse][day-1] == "N" or schedule[nurse][day-2] == "N"): return False
         elif shift_type == "N":
-            if day == 0 and history_shift.get(nurse) in ["D", "E"]: return False # 嚴格防範白夜、小夜接大夜
+            if day == 0 and history_shift.get(nurse) in ["D", "E"]: return False
             if day > 0 and schedule[nurse][day-1] in ["D", "E"]: return False
         return True
 
@@ -312,8 +312,8 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                         schedule[nurse][target_day] = "D"
                         allocated_days_indices.add(target_day)
 
-    # 🎯 STEP 5.5:【大夜解鎖・全大局剛性補人調節令】
-    # 當發現某天人數不足（尤其是大夜班缺固定班底時），全面解鎖所有開放 DEN 權限的全職人員共同救火補滿！
+    # 🎯 STEP 5.5:【全班別大局交叉救火調節令】
+    # 全面打通白、小、大夜！只要當天任何人手少於最低需求，全面調配所有當天空格且符合安全規範的全職人員補滿！
     for day in range(num_days):
         for shift_type in ["N", "E", "D"]:
             min_req = manpower_req[day][f"{shift_type}_min"]
@@ -323,11 +323,9 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                 possible_rescuers = []
                 for nurse in names:
                     if nurse in PART_TIME_STAFFS: continue 
-                    if schedule[nurse][day] != "": continue
+                    if schedule[nurse][day] != "": continue # 必須是空格
                     
-                    # 🚀【核心優化】：在大夜補人急救階段，全職具有 DEN 權限者全面開放救火
-                    is_qualified = can_work_shift(permissions[nurse], shift_type) or (shift_type == "N" and permissions[nurse] == "DEN")
-                    if not is_qualified: continue
+                    # 🚀 解鎖所有全職同仁（包含DEN大局權限者）交叉互相救火
                     if not is_shift_safe(nurse, day, shift_type): continue
                     
                     has_neighbor = False
@@ -339,16 +337,16 @@ def generate_schedule(names, permissions, requests, num_days, manpower_req, hist
                     
                 if not possible_rescuers: break
                 
+                # 優先挑選可以串聯成連續班的人，避免製造碎班
                 possible_rescuers.sort(key=lambda x: (1 if x[1] else 0, -sum(1 for s in schedule[x[0]] if s in ["D", "E", "N"])), reverse=True)
                 chosen_nurse = possible_rescuers[0][0]
                 schedule[chosen_nurse][day] = shift_type
                 
-                # 連帶補班防碎班
-                if shift_type in ["D", "E", "N"]: 
-                    if day < num_days - 1 and schedule[chosen_nurse][day+1] == "" and is_shift_safe(chosen_nurse, day+1, shift_type):
-                        schedule[chosen_nurse][day+1] = shift_type
-                    elif day > 0 and schedule[chosen_nurse][day-1] == "" and is_shift_safe(chosen_nurse, day-1, shift_type):
-                        schedule[chosen_nurse][day-1] = shift_type
+                # 🚀 連帶補班防碎班：如果是跨班被抓過來上班，幫他前後看能不能連著上，消滅1天碎班
+                if day < num_days - 1 and schedule[chosen_nurse][day+1] == "" and is_shift_safe(chosen_nurse, day+1, shift_type):
+                    schedule[chosen_nurse][day+1] = shift_type
+                elif day > 0 and schedule[chosen_nurse][day-1] == "" and is_shift_safe(chosen_nurse, day-1, shift_type):
+                    schedule[chosen_nurse][day-1] = shift_type
                         
                 current_count = sum(1 for n in names if schedule[n][day] == shift_type)
 
@@ -485,7 +483,7 @@ if file_b:
 
         st.markdown("---")
         if st.button("🚀 啟動終極平衡自動排班系統", type="primary", use_container_width=True):
-            with st.spinner("大夜全面救火優化中..."):
+            with st.spinner("全班別交叉救火優化中..."):
                 st.session_state["schedule_result"] = generate_schedule(names, permissions, requests, num_days, manpower_req_list, history_shift_final, history_streak_final)
                 st.session_state["run_success"] = True
 
@@ -538,7 +536,7 @@ if file_b:
             with tabs[2]: st.dataframe(holiday_df, use_container_width=True)
             with tabs[3]: st.dataframe(night_df, use_container_width=True)
             with tabs[4]:
-                if not issues: st.success("🎉 太棒了！大夜班全面由全職同仁補位救火，每日實際人力 100% 完美達標！")
+                if not issues: st.success("🎉 太棒了！全班別全面完成交叉自動調度，每日實際人力 100% 完美滿足！")
                 else: st.dataframe(pd.DataFrame(issues, columns=["姓名", "優化提醒"]), use_container_width=True)
 
             output = BytesIO()
