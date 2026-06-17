@@ -169,19 +169,7 @@ class NurseScheduler:
                             self.schedule[nurse][d] = PARTTIME_ALLOWED_SHIFT
                         target -= length
                         break
-            # 若還不足，單日補滿
-           for d in range(self.days):
-    if target <= 0:
-        break
 
-    if self._can_assign(
-        nurse,
-        d,
-        PARTTIME_ALLOWED_SHIFT,
-        allow_overwrite_off=True
-    ):
-        self.schedule[nurse][d] = PARTTIME_ALLOWED_SHIFT
-        target -= 1
             # 多出的 D 優先取消非固定
             while sum(1 for x in self.schedule[nurse] if x == PARTTIME_ALLOWED_SHIFT) > PARTTIME_DAYS:
                 removed = False
