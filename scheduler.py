@@ -49,6 +49,7 @@ class NurseScheduler:
         self._remove_single_day_fragments()
         self._trim_parttime_extra_days()
         self._repair_manpower_shortage()
+        self._recover_d_shortage()
         self._fill_blank_with_off()
         return self.schedule
 
@@ -376,6 +377,31 @@ class NurseScheduler:
             if not changed:
                 break
 
+    def _recover_d_shortage(self):
+        """最後專門補 D 班不足；不動夜班鎖定、兼職與預排休。"""
+        for day in range(self.days):
+            while self._shift_count(day, SHIFT_D) < self._min_req(day, SHIFT_D):
+                candidates = []
+
+                for nurse in self.names:
+                    if nurse in PART_TIME:
+                        continue
+                    if (nurse, day) in self.night_locked:
+                        continue
+                    if self.requests[nurse][day] != "":
+                        continue
+                    if self.schedule[nurse][day] != SHIFT_OFF:
+                        continue
+                    if self._can_assign(nurse, day, SHIFT_D, allow_overwrite_off=True):
+                        candidates.append(nurse)
+
+                if not candidates:
+                    break
+
+                # 優先選休假較多、工作量較少的人回補 D
+                candidates.sort(key=lambda n: (self._off_count(n), -self._workload(n)), reverse=True)
+                self.schedule[candidates[0]][day] = SHIFT_D
+
     def _trim_parttime_extra_days(self):
         """兼職固定 PARTTIME_DAYS 天 D；只刪非預排、非鎖定的多餘 D。"""
         for nurse in PART_TIME:
@@ -514,38 +540,32 @@ class NurseScheduler:
 
             if not changed:
                 break
-for nurse in full_time:
+        # 最後強制補休：只拆「高於最低人力」且非預排、非夜班鎖定的班
+        for nurse in full_time:
+            off_count = sum(1 for x in self.schedule[nurse] if x in REST_SHIFTS)
 
-    off_count = sum(
-        1
-        for x in self.schedule[nurse]
-        if x in REST_SHIFTS
-    )
+            while off_count < MIN_FULLTIME_OFF_DAYS:
+                best_day = None
 
-    while off_count < MIN_FULLTIME_OFF_DAYS:
+                for day in range(self.days):
+                    shift = self.schedule[nurse][day]
 
-        best_day = None
+                    if shift not in CLINICAL_SHIFTS:
+                        continue
+                    if self.requests[nurse][day] != "":
+                        continue
+                    if (nurse, day) in self.night_locked:
+                        continue
+                    if self._shift_count(day, shift) > self._min_req(day, shift):
+                        best_day = day
+                        break
 
-        for day in range(self.days):
+                if best_day is None:
+                    break
 
-            shift = self.schedule[nurse][day]
+                self.schedule[nurse][best_day] = SHIFT_OFF
+                off_count += 1
 
-            if shift not in CLINICAL_SHIFTS:
-                continue
-
-            if self.requests[nurse][day] != "":
-                continue
-
-            if self._shift_count(day, shift) > self._min_req(day, shift):
-                best_day = day
-                break
-
-        if best_day is None:
-            break
-
-        self.schedule[nurse][best_day] = SHIFT_OFF
-
-        off_count += 1
     def _fragment_penalty(self, nurse, day):
         cur = self.schedule[nurse][day]
         left = SHIFT_OFF if day == 0 else self.schedule[nurse][day - 1]
