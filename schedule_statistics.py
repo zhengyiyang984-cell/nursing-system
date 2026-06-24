@@ -3,11 +3,26 @@ from config import *
 
 
 def build_schedule_dataframe(schedule, names, date_headers, permissions=None):
+
     df = pd.DataFrame(schedule).T
+
     df = df.loc[names]
+
     df.columns = date_headers
+
+    # 新增姓名欄
+    df.insert(0, "姓名", df.index)
+
+    # 新增權限欄
     if permissions:
-        df.insert(0, "班別權限", [permissions.get(n, "DEN") for n in df.index])
+        df.insert(
+            1,
+            "班別權限",
+            [permissions.get(n, "DEN") for n in df.index]
+        )
+
+    df = df.reset_index(drop=True)
+
     return df
 
 
