@@ -356,7 +356,7 @@ if st.session_state.best_result:
     schedule_df = build_schedule_dataframe(schedule, CORE_STAFF, date_headers, permissions)
     daily_df = build_manpower_dataframe(schedule, CORE_STAFF, manpower, date_headers)
     person_df = build_person_statistics(schedule, CORE_STAFF)
-        tabs = st.tabs([
+       tabs = st.tabs([
             "📅 最終班表",
              "🔍 規則檢查"
         ])
