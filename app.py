@@ -410,22 +410,28 @@ if st.session_state.best_result:
             use_container_width=True
         )
     
-     with tabs[1]:
+         with tabs[1]:
 
-    if issues_df.empty:
-        st.success("沒有發現違規或提醒。")
-    else:
-        st.warning("仍有需要人工確認或調整的項目。")
-        st.dataframe(
-            issues_df,
-            use_container_width=True
+            if issues_df.empty:
+                st.success("沒有發現違規或提醒。")
+            else:
+                st.warning("仍有需要人工確認或調整的項目。")
+                st.dataframe(
+                    issues_df,
+                    use_container_width=True
+                )
+
+        excel_bytes = export_workbook(
+            schedule_df,
+            daily_df,
+            person_df,
+            issues_df
         )
-    
-        excel_bytes = export_workbook(schedule_df, daily_df, person_df, issues_df)
-    st.download_button(
-        "📥 下載彩色 Excel 班表",
-        data=excel_bytes,
-        file_name=f"2F護理排班_V3_{start_date.strftime('%m%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
+
+        st.download_button(
+            "📥 下載彩色 Excel 班表",
+            data=excel_bytes,
+            file_name=f"2F護理排班_V3_{start_date.strftime('%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
