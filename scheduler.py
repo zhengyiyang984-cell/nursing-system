@@ -326,7 +326,7 @@ class NurseScheduler:
     def _fill_blank_with_off(self):
         for nurse in self.names:
             for day in range(self.days):
-                if self.schedule[nurse][day] == "":
+                if self.schedule[nurse][day] == "SHIFT_OFF":
                     if self.requests[nurse][day] == SHIFT_R:
                         self.schedule[nurse][day] = SHIFT_R
                     else:
