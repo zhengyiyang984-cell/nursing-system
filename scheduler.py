@@ -375,90 +375,59 @@ class NurseScheduler:
                 break
 
     def _recover_d_shortage(self):
-        """最後專門補 D 班不足；不動夜班鎖定、兼職與預排休，並盡量不要犧牲休假不足的人。"""
+    """最後強制補 D 班不足。"""
 
-        for day in range(self.days):
+    for day in range(self.days):
 
-            safety = 0
+        safety = 0
 
-            while self._shift_count(day, SHIFT_D) < self._min_req(day, SHIFT_D):
+        while self._shift_count(day, SHIFT_D) < self._min_req(day, SHIFT_D):
 
-                safety += 1
+            safety += 1
+            if safety > len(self.names) + 5:
+                break
 
-                if safety > len(self.names) + 2:
-                    break
+            candidates = []
 
-                candidates = []
+            for nurse in self.names:
 
-                for nurse in self.names:
+                if nurse in PART_TIME:
+                    continue
 
-                    if nurse in PART_TIME:
-                        continue
+                if (nurse, day) in self.night_locked:
+                    continue
 
-                    if (nurse, day) in self.night_locked:
-                        continue
+                if self.requests[nurse][day] in [SHIFT_R, SHIFT_M]:
+                    continue
 
-                    if self.requests[nurse][day] != "":
-                        continue
+                if self.schedule[nurse][day] != SHIFT_OFF:
+                    continue
 
-                    if self.schedule[nurse][day] not in [SHIFT_OFF, ""]:
-                        continue
+                if not self._permission_ok(nurse, SHIFT_D):
+                    continue
 
-                    left = SHIFT_OFF if day == 0 else self.schedule[nurse][day - 1]
-                    right = SHIFT_OFF if day == self.days - 1 else self.schedule[nurse][day + 1]
+                prev_shift = self._prev(nurse, day)
 
-                    # 平常避免補出 1 天碎班，但如果 D 班真的不足，後面會放寬
-                    if left in REST_SHIFTS and right in REST_SHIFTS:
-                        continue
+                # N 後不能直接接 D
+                if prev_shift == SHIFT_N:
+                    continue
 
-                    if self._can_assign(
-                        nurse,
-                        day,
-                        SHIFT_D,
-                        allow_overwrite_off=True
-                    ):
-                        candidates.append(nurse)
+                candidates.append(nurse)
 
-                # 若沒有不碎班的人，才放寬條件救 D 班
-                if not candidates:
+            if not candidates:
+                break
 
-                    for nurse in self.names:
+            # 優先抓休假已經達標的人，避免陳慧屏休假更不足
+            candidates.sort(
+                key=lambda n: (
+                    self._off_count(n) >= MIN_FULLTIME_OFF_DAYS,
+                    self._off_count(n),
+                    -self._workload(n)
+                ),
+                reverse=True
+            )
 
-                        if nurse in PART_TIME:
-                            continue
-
-                        if (nurse, day) in self.night_locked:
-                            continue
-
-                        if self.requests[nurse][day] != "":
-                            continue
-
-                        if self.schedule[nurse][day] not in [SHIFT_OFF, ""]:
-                            continue
-
-                        if self._can_assign(
-                            nurse,
-                            day,
-                            SHIFT_D,
-                            allow_overwrite_off=True
-                        ):
-                            candidates.append(nurse)
-
-                if not candidates:
-                    break
-
-                # 優先抓休假已達標的人補 D，避免休假不足者被一直抓回來上班
-                candidates.sort(
-                    key=lambda n: (
-                        self._off_count(n) >= MIN_FULLTIME_OFF_DAYS,
-                        self._off_count(n),
-                        -self._workload(n),
-                        -self._night_count(n)
-                    ),
-                    reverse=True
-                )
-
-                self.schedule[candidates[0]][day] = SHIFT_D
+            self.schedule[candidates[0]][day] = SHIFT_D
 
     def _trim_parttime_extra_days(self):
         """兼職固定 PARTTIME_DAYS 天 D；只刪非預排、非鎖定的多餘 D。"""
