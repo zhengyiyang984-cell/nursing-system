@@ -348,69 +348,52 @@ if run:
 if st.session_state.best_result:
     best = st.session_state.best_result
     schedule = best["schedule"]
-
-    issues = validate_schedule(
-        schedule,
-        CORE_STAFF,
-        manpower,
-        history_shift_final,
-        requests
-    )
+    issues = validate_schedule(schedule, CORE_STAFF, manpower, history_shift_final, requests)
     issues_df = issues_to_dataframe(issues, date_headers)
     if issues_df.empty:
         issues_df = pd.DataFrame(columns=["對象/類別", "日期", "班別", "提醒"])
 
-    # 原始班表
-    schedule_df = build_schedule_dataframe(
-        schedule,
-        CORE_STAFF,
-        date_headers,
-        permissions
-    )
+    schedule_df = build_schedule_dataframe(schedule, CORE_STAFF, date_headers, permissions)
+    # ===== 人力統計加到班表底部 =====
 
-    # 每日人力仍保留給 Excel 匯出使用，但畫面不再另外條列顯示
-    daily_df = build_manpower_dataframe(
-        schedule,
-        CORE_STAFF,
-        manpower,
-        date_headers
-    )
-    person_df = build_person_statistics(schedule, CORE_STAFF)
-
-    # ===== 把每日人力直接加到班表最下方 =====
-    # 顯示格式：實際人數 / 最低需求，例如 4/4、3/3、2/2
-    manpower_rows = []
-    for shift in [SHIFT_D, SHIFT_E, SHIFT_N]:
-        row = {
-            "姓名": f"{shift}人力",
-            "權限": "實/需"
-        }
-
-        for idx, day_label in enumerate(date_headers):
-            actual = sum(
-                1 for nurse in CORE_STAFF
-                if schedule[nurse][idx] == shift
-            )
-            required = manpower[idx].get(f"{shift}_min", 0)
-            row[day_label] = f"{actual}/{required}"
-
-        manpower_rows.append(row)
-
-    schedule_display_df = pd.concat(
+    d_row = {"姓名": "D人力"}
+    e_row = {"姓名": "E人力"}
+    n_row = {"姓名": "N人力"}
+    
+    for idx, day in enumerate(date_headers):
+    
+        d_row[day] = sum(
+            1 for nurse in CORE_STAFF
+            if schedule[nurse][idx] == SHIFT_D
+        )
+    
+        e_row[day] = sum(
+            1 for nurse in CORE_STAFF
+            if schedule[nurse][idx] == SHIFT_E
+        )
+    
+        n_row[day] = sum(
+            1 for nurse in CORE_STAFF
+            if schedule[nurse][idx] == SHIFT_N
+        )
+    
+    schedule_df = pd.concat(
         [
             schedule_df,
-            pd.DataFrame(manpower_rows)
+            pd.DataFrame([d_row, e_row, n_row])
         ],
         ignore_index=True
     )
-
+    daily_df = build_manpower_dataframe(schedule, CORE_STAFF, manpower, date_headers)
+    person_df = build_person_statistics(schedule, CORE_STAFF)
+    
     st.subheader("🏆 排班結果")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("最佳分數", best["score"])
     c2.metric("違規/提醒數", len(issues))
     c3.metric("嘗試次數", attempts)
-
+    
     if st.session_state.top_results:
         ranking_df = pd.DataFrame([
             {
@@ -421,25 +404,25 @@ if st.session_state.best_result:
             }
             for x in st.session_state.top_results
         ])
-
+    
         with st.expander("查看前10名排班品質排行榜"):
             st.dataframe(ranking_df, use_container_width=True)
-
+    
     tabs = st.tabs([
         "📅 最終班表",
         "🔍 規則檢查"
     ])
-
+    
     with tabs[0]:
+
         col1, col2 = st.columns([4, 1])
 
         with col1:
             st.subheader("📅 最終班表")
-            st.caption("班表最下方已直接顯示每日 D / E / N 人力，格式為：實際人數/最低需求。")
             st.dataframe(
-                schedule_display_df,
+                schedule_df,
                 use_container_width=True,
-                height=620
+                height=520
             )
 
         with col2:
@@ -447,10 +430,18 @@ if st.session_state.best_result:
             st.dataframe(
                 person_df,
                 use_container_width=True,
-                height=620
+                height=520
             )
 
+        st.subheader("📊 每日人力統計")
+
+        st.dataframe(
+            daily_df,
+            use_container_width=True
+        )
+
     with tabs[1]:
+
         if issues_df.empty:
             st.success("沒有發現違規或提醒。")
         else:
@@ -460,17 +451,17 @@ if st.session_state.best_result:
                 use_container_width=True
             )
 
-    excel_bytes = export_workbook(
-        schedule_display_df,
-        daily_df,
-        person_df,
-        issues_df
-    )
+        excel_bytes = export_workbook(
+            schedule_df,
+            daily_df,
+            person_df,
+            issues_df
+        )
 
-    st.download_button(
-        "📥 下載彩色 Excel 班表",
-        data=excel_bytes,
-        file_name=f"2F護理排班_V3_{start_date.strftime('%m%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
+        st.download_button(
+            "📥 下載彩色 Excel 班表",
+            data=excel_bytes,
+            file_name=f"2F護理排班_V3_{start_date.strftime('%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
