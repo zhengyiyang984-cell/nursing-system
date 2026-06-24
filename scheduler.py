@@ -32,23 +32,19 @@ class NurseScheduler:
         self._assign_shift_by_need(SHIFT_D)
         self._fill_blank_with_off()
 
-        # 最後修復順序很重要：
-        # 1. 先修 N 班型，避免 N 後被補成 D/E
-        # 2. 再補休假與碎班
-        # 3. 最後才補每日最低人力
         for _ in range(6):
             self._enforce_night_pattern()
             self._balance_holidays()
             self._remove_single_day_fragments()
             self._trim_parttime_extra_days()
             self._repair_manpower_shortage()
+            self._recover_d_shortage()
             self._fill_blank_with_off()
 
         self._enforce_night_pattern()
         self._balance_holidays()
+        self._recover_d_shortage()
         self._remove_single_day_fragments()
-        self._trim_parttime_extra_days()
-        self._repair_manpower_shortage()
         self._recover_d_shortage()
         self._fill_blank_with_off()
         return self.schedule
@@ -326,7 +322,7 @@ class NurseScheduler:
     def _fill_blank_with_off(self):
         for nurse in self.names:
             for day in range(self.days):
-                if self.schedule[nurse][day] == "SHIFT_OFF":
+                if self.schedule[nurse][day] == "":
                     if self.requests[nurse][day] == SHIFT_R:
                         self.schedule[nurse][day] = SHIFT_R
                     else:
@@ -378,9 +374,14 @@ class NurseScheduler:
                 break
 
     def _recover_d_shortage(self):
-        """最後專門補 D 班不足；不動夜班鎖定、兼職與預排休。"""
+        """最後專門補 D 班不足；不動夜班鎖定、兼職與預排休，並避免補出 1 天碎班。"""
         for day in range(self.days):
+            safety = 0
             while self._shift_count(day, SHIFT_D) < self._min_req(day, SHIFT_D):
+                safety += 1
+                if safety > len(self.names) + 2:
+                    break
+
                 candidates = []
 
                 for nurse in self.names:
@@ -390,52 +391,41 @@ class NurseScheduler:
                         continue
                     if self.requests[nurse][day] != "":
                         continue
-                    if self.schedule[nurse][day] not in [
-                        SHIFT_OFF,
-                        ""
-                    ]:
+                    if self.schedule[nurse][day] not in [SHIFT_OFF, ""]:
                         continue
+
+                    left = SHIFT_OFF if day == 0 else self.schedule[nurse][day - 1]
+                    right = SHIFT_OFF if day == self.days - 1 else self.schedule[nurse][day + 1]
+
+                    # 避免 off-D-off / R-D-R 這種 1 天碎班
+                    if left in REST_SHIFTS and right in REST_SHIFTS:
+                        continue
+
                     if self._can_assign(nurse, day, SHIFT_D, allow_overwrite_off=True):
                         candidates.append(nurse)
 
+                # 如果沒有不碎班的人，才退而求其次找休假最多的人補 D
                 if not candidates:
+                    for nurse in self.names:
+                        if nurse in PART_TIME:
+                            continue
+                        if (nurse, day) in self.night_locked:
+                            continue
+                        if self.requests[nurse][day] != "":
+                            continue
+                        if self.schedule[nurse][day] not in [SHIFT_OFF, ""]:
+                            continue
+                        if self._can_assign(nurse, day, SHIFT_D, allow_overwrite_off=True):
+                            candidates.append(nurse)
 
-    # 從休假最多的人搶一天 D 回來
-    backup = []
+                if not candidates:
+                    break
 
-    for nurse in self.names:
-
-        if nurse in PART_TIME:
-            continue
-
-        if (nurse, day) in self.night_locked:
-            continue
-
-        if self.requests[nurse][day] != "":
-            continue
-
-        if self.schedule[nurse][day] != SHIFT_OFF:
-            continue
-
-        backup.append(nurse)
-
-    if not backup:
-        break
-
-    backup.sort(
-        key=lambda n: self._off_count(n),
-        reverse=True
-    )
-
-    self.schedule[backup[0]][day] = SHIFT_D
-    continue
-
-                # 優先選休假較多、工作量較少的人回補 D
                 candidates.sort(
                     key=lambda n: (
                         self._off_count(n),
                         -self._workload(n),
-                        self._night_count(n)
+                        -self._night_count(n)
                     ),
                     reverse=True
                 )
@@ -703,7 +693,7 @@ class NurseScheduler:
                         continue
 
                     # 非預排且當日人力有餘，直接改 off
-                    if self.requests[nurse][day] == "" and self._shift_count(day, cur) > self._min_req(day, cur):
+                    if self.requests[nurse][day] == "" and self._shift_count(day, cur) - 1 >= self._min_req(day, cur):
                         self.schedule[nurse][day] = SHIFT_OFF
                         changed = True
                         continue
