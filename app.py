@@ -356,23 +356,13 @@ if st.session_state.best_result:
     schedule_df = build_schedule_dataframe(schedule, CORE_STAFF, date_headers, permissions)
     # ===== 人力統計加到班表底部 =====
 
-   # ===== 人力統計加到班表底部 =====
-
 d_row = {col: "" for col in schedule_df.columns}
 e_row = {col: "" for col in schedule_df.columns}
 n_row = {col: "" for col in schedule_df.columns}
 
-# 找出姓名欄與權限欄
-name_col = schedule_df.columns[-1]
-perm_col = schedule_df.columns[0]
-
-d_row[name_col] = "D人力"
-e_row[name_col] = "E人力"
-n_row[name_col] = "N人力"
-
-d_row[perm_col] = ""
-e_row[perm_col] = ""
-n_row[perm_col] = ""
+d_row["姓名"] = "D人力"
+e_row["姓名"] = "E人力"
+n_row["姓名"] = "N人力"
 
 for idx, day in enumerate(date_headers):
 
