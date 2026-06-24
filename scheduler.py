@@ -390,7 +390,10 @@ class NurseScheduler:
                         continue
                     if self.requests[nurse][day] != "":
                         continue
-                    if self.schedule[nurse][day] != SHIFT_OFF:
+                    if self.schedule[nurse][day] not in [
+                        SHIFT_OFF,
+                        ""
+                    ]:
                         continue
                     if self._can_assign(nurse, day, SHIFT_D, allow_overwrite_off=True):
                         candidates.append(nurse)
@@ -399,7 +402,14 @@ class NurseScheduler:
                     break
 
                 # 優先選休假較多、工作量較少的人回補 D
-                candidates.sort(key=lambda n: (self._off_count(n), -self._workload(n)), reverse=True)
+                candidates.sort(
+                    key=lambda n: (
+                        self._off_count(n),
+                        -self._workload(n),
+                        self._night_count(n)
+                    ),
+                    reverse=True
+                )
                 self.schedule[candidates[0]][day] = SHIFT_D
 
     def _trim_parttime_extra_days(self):
@@ -556,12 +566,48 @@ class NurseScheduler:
                         continue
                     if (nurse, day) in self.night_locked:
                         continue
-                    if self._shift_count(day, shift) > self._min_req(day, shift):
+                    if self._shift_count(day, shift) - 1 >= self._min_req(day, shift):
                         best_day = day
                         break
 
                 if best_day is None:
-                    break
+
+    helpers = [
+        h for h in full_time
+        if h != nurse
+    ]
+
+    for helper in helpers:
+
+        for day in range(self.days):
+
+            shift = self.schedule[nurse][day]
+
+            if shift not in CLINICAL_SHIFTS:
+                continue
+
+            if self.requests[nurse][day] != "":
+                continue
+
+            if self._can_assign(
+                helper,
+                day,
+                shift,
+                allow_overwrite_off=True
+            ):
+
+                self.schedule[nurse][day] = SHIFT_OFF
+                self.schedule[helper][day] = shift
+
+                off_count += 1
+                best_day = day
+                break
+
+        if best_day is not None:
+            break
+
+    if best_day is None:
+        break
 
                 self.schedule[nurse][best_day] = SHIFT_OFF
                 off_count += 1
@@ -579,14 +625,17 @@ class NurseScheduler:
 
     def _remove_single_day_fragments(self):
         full_time = [n for n in self.names if n not in PART_TIME]
-        rest_values = set(REST_SHIFTS) | {""}
+        rest_values = {
+            SHIFT_OFF,
+            SHIFT_R
+        }
 
         for _ in range(10):
             changed = False
             for nurse in full_time:
                 for day in range(self.days):
                     cur = self.schedule[nurse][day]
-                    if cur not in [SHIFT_D, SHIFT_E]:
+                    if cur not in CLINICAL_SHIFTS:
                         continue
                     if (nurse, day) in self.night_locked:
                         continue
