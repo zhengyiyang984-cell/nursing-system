@@ -399,7 +399,36 @@ class NurseScheduler:
                         candidates.append(nurse)
 
                 if not candidates:
-                    break
+
+    # 從休假最多的人搶一天 D 回來
+    backup = []
+
+    for nurse in self.names:
+
+        if nurse in PART_TIME:
+            continue
+
+        if (nurse, day) in self.night_locked:
+            continue
+
+        if self.requests[nurse][day] != "":
+            continue
+
+        if self.schedule[nurse][day] != SHIFT_OFF:
+            continue
+
+        backup.append(nurse)
+
+    if not backup:
+        break
+
+    backup.sort(
+        key=lambda n: self._off_count(n),
+        reverse=True
+    )
+
+    self.schedule[backup[0]][day] = SHIFT_D
+    continue
 
                 # 優先選休假較多、工作量較少的人回補 D
                 candidates.sort(
