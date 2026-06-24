@@ -410,7 +410,7 @@ if st.session_state.best_result:
             use_container_width=True
         )
     
-  with tabs[1]:
+   with tabs[1]:
 
     if issues_df.empty:
         st.success("沒有發現違規或提醒。")
