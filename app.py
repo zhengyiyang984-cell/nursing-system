@@ -359,68 +359,68 @@ if st.session_state.best_result:
     
     st.subheader("🏆 排班結果")
 
-c1, c2, c3 = st.columns(3)
-c1.metric("最佳分數", best["score"])
-c2.metric("違規/提醒數", len(issues))
-c3.metric("嘗試次數", attempts)
-
-if st.session_state.top_results:
-    ranking_df = pd.DataFrame([
-        {
-            "排名": x["rank"],
-            "分數": x["score"],
-            "提醒數": len(x["issues"]),
-            "seed": x["seed"]
-        }
-        for x in st.session_state.top_results
-    ])
-
-    with st.expander("查看前10名排班品質排行榜"):
-        st.dataframe(ranking_df, use_container_width=True)
-
-tabs = st.tabs([
-    "📅 最終班表",
-    "🔍 規則檢查"
-])
-
-with tabs[0]:
-
-    col1, col2 = st.columns([4, 1])
-
-    with col1:
-        st.subheader("📅 最終班表")
-        st.dataframe(
-            schedule_df,
-            use_container_width=True,
-            height=520
-        )
-
-    with col2:
-        st.subheader("🌴 休假統計")
-        st.dataframe(
-            person_df,
-            use_container_width=True,
-            height=520
-        )
-
-    st.subheader("📊 每日人力統計")
-
-    st.dataframe(
-        daily_df,
-        use_container_width=True
-    )
-
-with tabs[1]:
-
-
+    c1, c2, c3 = st.columns(3)
+    c1.metric("最佳分數", best["score"])
+    c2.metric("違規/提醒數", len(issues))
+    c3.metric("嘗試次數", attempts)
     
-        if issues_df.empty:
-            st.success("沒有發現違規或提醒。")
-        else:
-            st.warning("仍有需要人工確認或調整的項目。")
-            st.dataframe(issues_df, use_container_width=True)
-
-    excel_bytes = export_workbook(schedule_df, daily_df, person_df, issues_df)
+    if st.session_state.top_results:
+        ranking_df = pd.DataFrame([
+            {
+                "排名": x["rank"],
+                "分數": x["score"],
+                "提醒數": len(x["issues"]),
+                "seed": x["seed"]
+            }
+            for x in st.session_state.top_results
+        ])
+    
+        with st.expander("查看前10名排班品質排行榜"):
+            st.dataframe(ranking_df, use_container_width=True)
+    
+    tabs = st.tabs([
+        "📅 最終班表",
+        "🔍 規則檢查"
+    ])
+    
+    with tabs[0]:
+    
+        col1, col2 = st.columns([4, 1])
+    
+        with col1:
+            st.subheader("📅 最終班表")
+            st.dataframe(
+                schedule_df,
+                use_container_width=True,
+                height=520
+            )
+    
+        with col2:
+            st.subheader("🌴 休假統計")
+            st.dataframe(
+                person_df,
+                use_container_width=True,
+                height=520
+            )
+    
+        st.subheader("📊 每日人力統計")
+    
+        st.dataframe(
+            daily_df,
+            use_container_width=True
+        )
+    
+    with tabs[1]:
+    
+    
+        
+            if issues_df.empty:
+                st.success("沒有發現違規或提醒。")
+            else:
+                st.warning("仍有需要人工確認或調整的項目。")
+                st.dataframe(issues_df, use_container_width=True)
+    
+        excel_bytes = export_workbook(schedule_df, daily_df, person_df, issues_df)
     st.download_button(
         "📥 下載彩色 Excel 班表",
         data=excel_bytes,
