@@ -405,7 +405,7 @@ schedule_df = pd.concat(
 daily_df = build_manpower_dataframe(schedule, CORE_STAFF, manpower, date_headers)
 person_df = build_person_statistics(schedule, CORE_STAFF)
     
-    st.subheader("🏆 排班結果")
+st.subheader("🏆 排班結果")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("最佳分數", best["score"])
