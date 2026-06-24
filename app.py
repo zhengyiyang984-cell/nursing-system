@@ -354,6 +354,36 @@ if st.session_state.best_result:
         issues_df = pd.DataFrame(columns=["對象/類別", "日期", "班別", "提醒"])
 
     schedule_df = build_schedule_dataframe(schedule, CORE_STAFF, date_headers, permissions)
+    # ===== 人力統計加到班表底部 =====
+
+    d_row = {"姓名": "D人力"}
+    e_row = {"姓名": "E人力"}
+    n_row = {"姓名": "N人力"}
+    
+    for idx, day in enumerate(date_headers):
+    
+        d_row[day] = sum(
+            1 for nurse in CORE_STAFF
+            if schedule[nurse][idx] == SHIFT_D
+        )
+    
+        e_row[day] = sum(
+            1 for nurse in CORE_STAFF
+            if schedule[nurse][idx] == SHIFT_E
+        )
+    
+        n_row[day] = sum(
+            1 for nurse in CORE_STAFF
+            if schedule[nurse][idx] == SHIFT_N
+        )
+    
+    schedule_df = pd.concat(
+        [
+            schedule_df,
+            pd.DataFrame([d_row, e_row, n_row])
+        ],
+        ignore_index=True
+    )
     daily_df = build_manpower_dataframe(schedule, CORE_STAFF, manpower, date_headers)
     person_df = build_person_statistics(schedule, CORE_STAFF)
     
