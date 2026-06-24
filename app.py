@@ -402,7 +402,7 @@ schedule_df = pd.concat(
     ],
     ignore_index=True
 )
-    daily_df = build_manpower_dataframe(schedule, CORE_STAFF, manpower, date_headers)
+daily_df = build_manpower_dataframe(schedule, CORE_STAFF, manpower, date_headers)
     person_df = build_person_statistics(schedule, CORE_STAFF)
     
     st.subheader("🏆 排班結果")
