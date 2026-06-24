@@ -348,81 +348,98 @@ if run:
 if st.session_state.best_result:
     best = st.session_state.best_result
     schedule = best["schedule"]
-    issues = validate_schedule(schedule, CORE_STAFF, manpower, history_shift_final, requests)
+
+    issues = validate_schedule(
+        schedule,
+        CORE_STAFF,
+        manpower,
+        history_shift_final,
+        requests
+    )
     issues_df = issues_to_dataframe(issues, date_headers)
+
     if issues_df.empty:
-        issues_df = pd.DataFrame(columns=["對象/類別", "日期", "班別", "提醒"])
+        issues_df = pd.DataFrame(
+            columns=["對象/類別", "日期", "班別", "提醒"]
+        )
 
-    schedule_df = build_schedule_dataframe(schedule, CORE_STAFF, date_headers, permissions)
-    # ===== 人力統計加到班表底部 =====
-
-d_row = {col: "" for col in schedule_df.columns}
-e_row = {col: "" for col in schedule_df.columns}
-n_row = {col: "" for col in schedule_df.columns}
-
-d_row["姓名"] = "D人力"
-e_row["姓名"] = "E人力"
-n_row["姓名"] = "N人力"
-
-for idx, day in enumerate(date_headers):
-
-    d_count = sum(
-        1 for nurse in CORE_STAFF
-        if schedule[nurse][idx] == SHIFT_D
+    schedule_df = build_schedule_dataframe(
+        schedule,
+        CORE_STAFF,
+        date_headers,
+        permissions
     )
 
-    e_count = sum(
-        1 for nurse in CORE_STAFF
-        if schedule[nurse][idx] == SHIFT_E
+    # ===== 人力統計直接加到班表底部 =====
+    d_row = {col: "" for col in schedule_df.columns}
+    e_row = {col: "" for col in schedule_df.columns}
+    n_row = {col: "" for col in schedule_df.columns}
+
+    d_row["姓名"] = "D人力"
+    e_row["姓名"] = "E人力"
+    n_row["姓名"] = "N人力"
+
+    for idx, day in enumerate(date_headers):
+        d_count = sum(
+            1 for nurse in CORE_STAFF
+            if schedule[nurse][idx] == SHIFT_D
+        )
+        e_count = sum(
+            1 for nurse in CORE_STAFF
+            if schedule[nurse][idx] == SHIFT_E
+        )
+        n_count = sum(
+            1 for nurse in CORE_STAFF
+            if schedule[nurse][idx] == SHIFT_N
+        )
+
+        d_row[day] = f"{d_count}/{manpower[idx]['D_min']}"
+        e_row[day] = f"{e_count}/{manpower[idx]['E_min']}"
+        n_row[day] = f"{n_count}/{manpower[idx]['N_min']}"
+
+    schedule_df = pd.concat(
+        [
+            schedule_df,
+            pd.DataFrame([d_row, e_row, n_row])
+        ],
+        ignore_index=True
     )
 
-    n_count = sum(
-        1 for nurse in CORE_STAFF
-        if schedule[nurse][idx] == SHIFT_N
+    daily_df = build_manpower_dataframe(
+        schedule,
+        CORE_STAFF,
+        manpower,
+        date_headers
     )
+    person_df = build_person_statistics(schedule, CORE_STAFF)
 
-    d_row[day] = f"{d_count}/{manpower[idx]['D_min']}"
-    e_row[day] = f"{e_count}/{manpower[idx]['E_min']}"
-    n_row[day] = f"{n_count}/{manpower[idx]['N_min']}"
+    st.subheader("🏆 排班結果")
 
-schedule_df = pd.concat(
-    [
-        schedule_df,
-        pd.DataFrame([d_row, e_row, n_row])
-    ],
-    ignore_index=True
-)
-daily_df = build_manpower_dataframe(schedule, CORE_STAFF, manpower, date_headers)
-person_df = build_person_statistics(schedule, CORE_STAFF)
-    
-st.subheader("🏆 排班結果")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("最佳分數", best["score"])
+    c2.metric("違規/提醒數", len(issues))
+    c3.metric("嘗試次數", attempts)
 
-c1, c2, c3 = st.columns(3)
-c1.metric("最佳分數", best["score"])
-c2.metric("違規/提醒數", len(issues))
-c3.metric("嘗試次數", attempts)
-    
-if st.session_state.top_results:
-    ranking_df = pd.DataFrame([
-        {
-            "排名": x["rank"],
-            "分數": x["score"],
-            "提醒數": len(x["issues"]),
-            "seed": x["seed"]
-        }
-        for x in st.session_state.top_results
-    ])
-    
-    with st.expander("查看前10名排班品質排行榜"):
-        st.dataframe(ranking_df, use_container_width=True)
-    
+    if st.session_state.top_results:
+        ranking_df = pd.DataFrame([
+            {
+                "排名": x["rank"],
+                "分數": x["score"],
+                "提醒數": len(x["issues"]),
+                "seed": x["seed"]
+            }
+            for x in st.session_state.top_results
+        ])
+
+        with st.expander("查看前10名排班品質排行榜"):
+            st.dataframe(ranking_df, use_container_width=True)
+
     tabs = st.tabs([
         "📅 最終班表",
         "🔍 規則檢查"
     ])
-    
-    with tabs[0]:
 
+    with tabs[0]:
         col1, col2 = st.columns([4, 1])
 
         with col1:
@@ -430,7 +447,7 @@ if st.session_state.top_results:
             st.dataframe(
                 schedule_df,
                 use_container_width=True,
-                height=520
+                height=620
             )
 
         with col2:
@@ -438,11 +455,10 @@ if st.session_state.top_results:
             st.dataframe(
                 person_df,
                 use_container_width=True,
-                height=520
+                height=620
             )
 
     with tabs[1]:
-
         if issues_df.empty:
             st.success("沒有發現違規或提醒。")
         else:
@@ -452,17 +468,17 @@ if st.session_state.top_results:
                 use_container_width=True
             )
 
-        excel_bytes = export_workbook(
-            schedule_df,
-            daily_df,
-            person_df,
-            issues_df
-        )
+    excel_bytes = export_workbook(
+        schedule_df,
+        daily_df,
+        person_df,
+        issues_df
+    )
 
-        st.download_button(
-            "📥 下載彩色 Excel 班表",
-            data=excel_bytes,
-            file_name=f"2F護理排班_V3_{start_date.strftime('%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
+    st.download_button(
+        "📥 下載彩色 Excel 班表",
+        data=excel_bytes,
+        file_name=f"2F護理排班_V3_{start_date.strftime('%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
