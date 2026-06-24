@@ -407,7 +407,7 @@ person_df = build_person_statistics(schedule, CORE_STAFF)
     
 st.subheader("🏆 排班結果")
 
-    c1, c2, c3 = st.columns(3)
+c1, c2, c3 = st.columns(3)
     c1.metric("最佳分數", best["score"])
     c2.metric("違規/提醒數", len(issues))
     c3.metric("嘗試次數", attempts)
