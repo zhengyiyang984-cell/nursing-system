@@ -47,7 +47,32 @@ class NurseScheduler:
         self._remove_single_day_fragments()
         self._recover_d_shortage()
         self._fill_blank_with_off()
-
+        for nurse in full_time:
+        
+            while self._off_count(nurse) < MIN_FULLTIME_OFF_DAYS:
+        
+                candidates = []
+        
+                for day in range(self.days):
+        
+                    shift = self.schedule[nurse][day]
+        
+                    if shift not in CLINICAL_SHIFTS:
+                        continue
+        
+                    if self.requests[nurse][day] != "":
+                        continue
+        
+                    if self._shift_count(day, shift) - 1 >= self._min_req(day, shift):
+        
+                        candidates.append(day)
+        
+                if not candidates:
+                    break
+        
+                day = candidates[0]
+        
+                self.schedule[nurse][day] = SHIFT_OFF
         return self.schedule
 
     # ---------- 基礎工具 ----------
@@ -418,15 +443,21 @@ class NurseScheduler:
                 if not candidates:
                     break
 
+                candidates = [
+                    n for n in candidates
+                    if self._off_count(n) > MIN_FULLTIME_OFF_DAYS
+                ]
+                
+                if not candidates:
+                    break
+                
                 candidates.sort(
                     key=lambda n: (
-                        self._off_count(n) >= MIN_FULLTIME_OFF_DAYS,
                         self._off_count(n),
                         -self._workload(n)
                     ),
                     reverse=True
                 )
-
                 self.schedule[candidates[0]][day] = SHIFT_D
     def _trim_parttime_extra_days(self):
         """兼職固定 PARTTIME_DAYS 天 D；只刪非預排、非鎖定的多餘 D。"""
@@ -690,7 +721,14 @@ class NurseScheduler:
                         continue
 
                     # 非預排且當日人力有餘，直接改 off
-                    if self.requests[nurse][day] == "" and self._shift_count(day, cur) - 1 >= self._min_req(day, cur):
+                    if (
+                        self.requests[nurse][day] == ""
+                        and self._shift_count(day, cur) - 1 >= self._min_req(day, cur)
+                    ):
+                    
+                        self.schedule[nurse][day] = SHIFT_OFF
+                    
+                        continue
                         self.schedule[nurse][day] = SHIFT_OFF
                         changed = True
                         continue
