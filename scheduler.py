@@ -35,6 +35,36 @@ class NurseScheduler:
         for _ in range(6):
             self._enforce_night_pattern()
             self._balance_holidays()
+            # 最後補休假不足的人
+for nurse in full_time:
+
+    off_days = self._off_count(nurse)
+
+    while off_days < MIN_FULLTIME_OFF_DAYS:
+
+        candidates = []
+
+        for day in range(self.days):
+
+            shift = self.schedule[nurse][day]
+
+            if shift not in CLINICAL_SHIFTS:
+                continue
+
+            if self.requests[nurse][day] != "":
+                continue
+
+            if self._shift_count(day, shift) - 1 >= self._min_req(day, shift):
+                candidates.append(day)
+
+        if not candidates:
+            break
+
+        day = candidates[0]
+
+        self.schedule[nurse][day] = SHIFT_OFF
+
+        off_days += 1
             self._remove_single_day_fragments()
             self._trim_parttime_extra_days()
             self._repair_manpower_shortage()
