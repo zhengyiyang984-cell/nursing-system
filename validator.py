@@ -14,6 +14,7 @@ def validate_schedule(schedule, names, manpower, history_shift=None, requests=No
     issues = []
     days = len(manpower)
 
+    # 每日人力檢查
     for d in range(days):
         for shift in CLINICAL_SHIFTS:
             count = sum(1 for n in names if schedule[n][d] == shift)
@@ -37,7 +38,7 @@ def validate_schedule(schedule, names, manpower, history_shift=None, requests=No
             if (prev, cur) in FORBIDDEN_TRANSITIONS:
                 issues.append([n, d, cur, f"不允許 {prev} → {cur}"])
 
-        # 最多連上 5 天
+        # 最多連上 MAX_CONTINUOUS_WORK 天
         streak = 0
         for d in range(days):
             if schedule[n][d] in WORK_SHIFTS:
@@ -52,10 +53,9 @@ def validate_schedule(schedule, names, manpower, history_shift=None, requests=No
         while d < days:
             if schedule[n][d] == SHIFT_N:
                 if d + 3 >= days:
-                    # 月底不足 4 格，不強制完整，但至少不可 N 後 D/E/M
                     d += 1
                     continue
-                block = schedule[n][d:d+4]
+                block = schedule[n][d:d + 4]
                 if block != NIGHT_BLOCK:
                     issues.append([n, d, "N", "大夜必須為 N → N → off → off"])
                 d += 4
@@ -70,7 +70,7 @@ def validate_schedule(schedule, names, manpower, history_shift=None, requests=No
                 if left_rest and right_rest:
                     issues.append([n, d, schedule[n][d], "出現 1 天碎班"])
 
-        # 休假天數
+        # 休假天數 / 兼職規則
         if n not in PART_TIME:
             off_days = sum(1 for x in schedule[n] if x in REST_SHIFTS)
             if off_days < MIN_FULLTIME_OFF_DAYS:
