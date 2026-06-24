@@ -494,40 +494,56 @@ class NurseScheduler:
 
         for _ in range(30):
             changed = False
-            off_counts = {n: sum(1 for x in self.schedule[n] if x in REST_SHIFTS) for n in full_time}
-            under = [n for n in full_time if off_counts[n] < MIN_FULLTIME_OFF_DAYS]
+            off_counts = {
+                n: sum(1 for x in self.schedule[n] if x in REST_SHIFTS)
+                for n in full_time
+            }
+            under = [
+                n for n in full_time
+                if off_counts[n] < MIN_FULLTIME_OFF_DAYS
+            ]
+
             if not under:
                 break
+
             under.sort(key=lambda n: off_counts[n])
 
             for nurse in under:
-                # 先找「人力高於最低」的班直接轉 off
                 candidates = []
+
                 for day in range(self.days):
                     shift = self.schedule[nurse][day]
+
                     if shift not in CLINICAL_SHIFTS:
                         continue
                     if self.requests[nurse][day] != "":
                         continue
                     if (nurse, day) in self.night_locked:
                         continue
+
+                    # 拿掉這班後，該班仍不能低於最低人力
                     if self._shift_count(day, shift) - 1 >= self._min_req(day, shift):
                         candidates.append(day)
 
                 if candidates:
-                    # 優先拿掉單日碎班或工作量較重的天
-                    candidates.sort(key=lambda d: self._fragment_penalty(nurse, d), reverse=True)
+                    candidates.sort(
+                        key=lambda d: self._fragment_penalty(nurse, d),
+                        reverse=True
+                    )
                     d = candidates[0]
                     self.schedule[nurse][d] = SHIFT_OFF
                     changed = True
                     break
 
-                # 若不能直接拿掉，找休假較多者頂替
+                # 若不能直接休，找休假較多的人頂班
                 for day in range(self.days):
                     shift = self.schedule[nurse][day]
+
                     if shift not in CLINICAL_SHIFTS:
                         continue
                     if self.requests[nurse][day] != "":
+                        continue
+                    if (nurse, day) in self.night_locked:
                         continue
 
                     helpers = [
@@ -537,6 +553,7 @@ class NurseScheduler:
                         and (h, day) not in self.night_locked
                         and self._can_assign(h, day, shift, allow_overwrite_off=True)
                     ]
+
                     if helpers:
                         helpers.sort(key=lambda h: (-off_counts[h], self._workload(h)))
                         helper = helpers[0]
@@ -550,67 +567,76 @@ class NurseScheduler:
 
             if not changed:
                 break
-        # 最後強制補休：只拆「高於最低人力」且非預排、非夜班鎖定的班
+
+        # 最後強制補休：只拆「高於最低人力」且非預排、非夜班鎖定的班。
+        # 若無法直接拆，嘗試找其他同仁頂班。
         for nurse in full_time:
-            off_count = sum(1 for x in self.schedule[nurse] if x in REST_SHIFTS)
-    
-                while off_count < MIN_FULLTIME_OFF_DAYS:
-                    best_day = None
-    
-                    for day in range(self.days):
-                        shift = self.schedule[nurse][day]
-    
-                        if shift not in CLINICAL_SHIFTS:
-                            continue
-                        if self.requests[nurse][day] != "":
-                            continue
-                        if (nurse, day) in self.night_locked:
-                            continue
-                        if self._shift_count(day, shift) - 1 >= self._min_req(day, shift):
-                            best_day = day
-                            break
-    
-                    if best_day is None:
+            off_count = sum(
+                1 for x in self.schedule[nurse]
+                if x in REST_SHIFTS
+            )
 
-    helpers = [
-        h for h in full_time
-        if h != nurse
-    ]
+            while off_count < MIN_FULLTIME_OFF_DAYS:
+                best_day = None
 
-    for helper in helpers:
+                for day in range(self.days):
+                    shift = self.schedule[nurse][day]
 
-        for day in range(self.days):
+                    if shift not in CLINICAL_SHIFTS:
+                        continue
+                    if self.requests[nurse][day] != "":
+                        continue
+                    if (nurse, day) in self.night_locked:
+                        continue
 
-            shift = self.schedule[nurse][day]
+                    if self._shift_count(day, shift) - 1 >= self._min_req(day, shift):
+                        best_day = day
+                        break
 
-            if shift not in CLINICAL_SHIFTS:
-                continue
+                if best_day is not None:
+                    self.schedule[nurse][best_day] = SHIFT_OFF
+                    off_count += 1
+                    continue
 
-            if self.requests[nurse][day] != "":
-                continue
+                replaced = False
 
-            if self._can_assign(
-                helper,
-                day,
-                shift,
-                allow_overwrite_off=True
-            ):
+                for day in range(self.days):
+                    shift = self.schedule[nurse][day]
 
-                self.schedule[nurse][day] = SHIFT_OFF
-                self.schedule[helper][day] = shift
+                    if shift not in CLINICAL_SHIFTS:
+                        continue
+                    if self.requests[nurse][day] != "":
+                        continue
+                    if (nurse, day) in self.night_locked:
+                        continue
 
-                off_count += 1
-                best_day = day
-                break
+                    helpers = [
+                        h for h in full_time
+                        if h != nurse
+                        and (h, day) not in self.night_locked
+                        and self._can_assign(h, day, shift, allow_overwrite_off=True)
+                    ]
 
-        if best_day is not None:
-            break
+                    if not helpers:
+                        continue
 
-    if best_day is None:
-        break
+                    helpers.sort(
+                        key=lambda h: (
+                            self._off_count(h),
+                            -self._workload(h)
+                        ),
+                        reverse=True
+                    )
 
-                self.schedule[nurse][best_day] = SHIFT_OFF
-                off_count += 1
+                    helper = helpers[0]
+                    self.schedule[nurse][day] = SHIFT_OFF
+                    self.schedule[helper][day] = shift
+                    off_count += 1
+                    replaced = True
+                    break
+
+                if not replaced:
+                    break
 
     def _fragment_penalty(self, nurse, day):
         cur = self.schedule[nurse][day]
