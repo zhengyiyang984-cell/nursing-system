@@ -551,26 +551,26 @@ class NurseScheduler:
             if not changed:
                 break
         # 最後強制補休：只拆「高於最低人力」且非預排、非夜班鎖定的班
-        for nurse in full_time:
-            off_count = sum(1 for x in self.schedule[nurse] if x in REST_SHIFTS)
-
-            while off_count < MIN_FULLTIME_OFF_DAYS:
-                best_day = None
-
-                for day in range(self.days):
-                    shift = self.schedule[nurse][day]
-
-                    if shift not in CLINICAL_SHIFTS:
-                        continue
-                    if self.requests[nurse][day] != "":
-                        continue
-                    if (nurse, day) in self.night_locked:
-                        continue
-                    if self._shift_count(day, shift) - 1 >= self._min_req(day, shift):
-                        best_day = day
-                        break
-
-                if best_day is None:
+            for nurse in full_time:
+                off_count = sum(1 for x in self.schedule[nurse] if x in REST_SHIFTS)
+    
+                while off_count < MIN_FULLTIME_OFF_DAYS:
+                    best_day = None
+    
+                    for day in range(self.days):
+                        shift = self.schedule[nurse][day]
+    
+                        if shift not in CLINICAL_SHIFTS:
+                            continue
+                        if self.requests[nurse][day] != "":
+                            continue
+                        if (nurse, day) in self.night_locked:
+                            continue
+                        if self._shift_count(day, shift) - 1 >= self._min_req(day, shift):
+                            best_day = day
+                            break
+    
+                    if best_day is None:
 
     helpers = [
         h for h in full_time
