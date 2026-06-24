@@ -356,7 +356,47 @@ if st.session_state.best_result:
     schedule_df = build_schedule_dataframe(schedule, CORE_STAFF, date_headers, permissions)
     daily_df = build_manpower_dataframe(schedule, CORE_STAFF, manpower, date_headers)
     person_df = build_person_statistics(schedule, CORE_STAFF)
-
+            tabs = st.tabs([
+                "📅 最終班表",
+                "🔍 規則檢查"
+            ])
+        
+            with tabs[0]:
+        
+                col1, col2 = st.columns([4, 1])
+        
+                with col1:
+                    st.subheader("📅 最終班表")
+                    st.dataframe(
+                        schedule_df,
+                        use_container_width=True,
+                        height=520
+                    )
+        
+                with col2:
+                    st.subheader("🌴 休假統計")
+                    st.dataframe(
+                        person_df,
+                        use_container_width=True,
+                        height=520
+                    )
+        
+                st.subheader("📊 每日人力統計")
+                st.dataframe(
+                    daily_df,
+                    use_container_width=True
+                )
+        
+            with tabs[1]:
+        
+                if issues_df.empty:
+                    st.success("沒有發現違規或提醒。")
+                else:
+                    st.warning("仍有需要人工確認或調整的項目。")
+                    st.dataframe(
+                        issues_df,
+                        use_container_width=True
+                    )
     st.subheader("🏆 排班結果")
     c1, c2, c3 = st.columns(3)
     c1.metric("最佳分數", best["score"])
@@ -371,63 +411,7 @@ if st.session_state.best_result:
         with st.expander("查看前10名排班品質排行榜"):
             st.dataframe(ranking_df, use_container_width=True)
 
-  tabs = st.tabs([
-    "📅 最終班表",
-    "🔍 規則檢查"
-])
-
-with tabs[0]:
-
-    col1, col2 = st.columns([4, 1])
-
-    with col1:
-
-        st.subheader("📅 最終班表")
-
-        st.dataframe(
-            schedule_df,
-            use_container_width=True,
-            height=520
-        )
-
-    with col2:
-
-        st.subheader("🌴 休假統計")
-
-        off_columns = [
-            c for c in person_df.columns
-            if "姓名" in str(c)
-            or "休假" in str(c)
-        ]
-
-        if len(off_columns) >= 2:
-            off_df = person_df[off_columns]
-        else:
-            off_df = person_df
-
-        st.dataframe(
-            off_df,
-            use_container_width=True,
-            height=520
-        )
-
-    st.subheader("📊 每日人力統計")
-
-    st.dataframe(
-        daily_df,
-        use_container_width=True
-    )
-
-with tabs[1]:
-
-    if issues_df.empty:
-        st.success("沒有發現違規或提醒。")
-    else:
-        st.warning("仍有需要人工確認或調整的項目。")
-        st.dataframe(
-            issues_df,
-            use_container_width=True
-        )
+    
         if issues_df.empty:
             st.success("沒有發現違規或提醒。")
         else:
