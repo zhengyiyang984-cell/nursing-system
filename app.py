@@ -412,19 +412,19 @@ c1.metric("最佳分數", best["score"])
 c2.metric("違規/提醒數", len(issues))
 c3.metric("嘗試次數", attempts)
     
-    if st.session_state.top_results:
-        ranking_df = pd.DataFrame([
-            {
-                "排名": x["rank"],
-                "分數": x["score"],
-                "提醒數": len(x["issues"]),
-                "seed": x["seed"]
-            }
-            for x in st.session_state.top_results
-        ])
+if st.session_state.top_results:
+    ranking_df = pd.DataFrame([
+        {
+            "排名": x["rank"],
+            "分數": x["score"],
+            "提醒數": len(x["issues"]),
+            "seed": x["seed"]
+        }
+        for x in st.session_state.top_results
+    ])
     
-        with st.expander("查看前10名排班品質排行榜"):
-            st.dataframe(ranking_df, use_container_width=True)
+    with st.expander("查看前10名排班品質排行榜"):
+        st.dataframe(ranking_df, use_container_width=True)
     
     tabs = st.tabs([
         "📅 最終班表",
