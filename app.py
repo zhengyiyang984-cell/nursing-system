@@ -384,9 +384,9 @@ if st.session_state.best_result:
     ])
     
     with tabs[0]:
-    
+
         col1, col2 = st.columns([4, 1])
-    
+
         with col1:
             st.subheader("📅 最終班表")
             st.dataframe(
@@ -394,7 +394,7 @@ if st.session_state.best_result:
                 use_container_width=True,
                 height=520
             )
-    
+
         with col2:
             st.subheader("🌴 休假統計")
             st.dataframe(
@@ -402,24 +402,24 @@ if st.session_state.best_result:
                 use_container_width=True,
                 height=520
             )
-    
+
         st.subheader("📊 每日人力統計")
-    
+
         st.dataframe(
             daily_df,
             use_container_width=True
         )
-    
-         with tabs[1]:
 
-            if issues_df.empty:
-                st.success("沒有發現違規或提醒。")
-            else:
-                st.warning("仍有需要人工確認或調整的項目。")
-                st.dataframe(
-                    issues_df,
-                    use_container_width=True
-                )
+    with tabs[1]:
+
+        if issues_df.empty:
+            st.success("沒有發現違規或提醒。")
+        else:
+            st.warning("仍有需要人工確認或調整的項目。")
+            st.dataframe(
+                issues_df,
+                use_container_width=True
+            )
 
         excel_bytes = export_workbook(
             schedule_df,
