@@ -361,7 +361,7 @@ if st.session_state.best_result:
              "🔍 規則檢查"
         ])
         
-        with tabs[0]:
+    with tabs[0]:
         
                 col1, col2 = st.columns([4, 1])
         
