@@ -15,7 +15,12 @@ class NurseScheduler:
         self.history_streak = history_streak
         self.days = len(manpower)
         self.random = random.Random(seed)
-        self.schedule = {n: ["" for _ in range(self.days)] for n in self.names}
+        self.schedule = {
+            n: ["" for _ in range(self.days)]
+            for n in self.names
+        }
+
+        self.night_locked = set()
         # 鎖定兼職由 _assign_parttime 排出的 D，避免後續補人力又把兼職排超過 10 天
         self.fixed_parttime_days = set()
 
@@ -257,12 +262,17 @@ class NurseScheduler:
         return True
 
     def _place_night_block(self, nurse, start_day):
-        self.schedule[nurse][start_day] = SHIFT_N
-        if start_day + 1 < self.days:
-            self.schedule[nurse][start_day + 1] = SHIFT_N
-        for d in [start_day + 2, start_day + 3]:
-            if d < self.days and self.schedule[nurse][d] in ["", SHIFT_OFF]:
-                self.schedule[nurse][d] = SHIFT_OFF
+      self.schedule[nurse][start_day] = SHIFT_N
+      self.night_locked.add((nurse, start_day))
+
+      if start_day + 1 < self.days:
+         self.schedule[nurse][start_day + 1] = SHIFT_N
+         self.night_locked.add((nurse, start_day + 1))
+
+      for d in [start_day + 2, start_day + 3]:
+          if d < self.days:
+              self.schedule[nurse][d] = SHIFT_OFF
+              self.night_locked.add((nurse, d))
 
     def _assign_shift_by_need(self, shift):
         for day in range(self.days):
