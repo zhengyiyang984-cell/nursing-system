@@ -55,37 +55,44 @@ class NurseScheduler:
     # ============================================================
     # 主流程
     # ============================================================
-    def generate(self):
-        self._apply_requests()
-        self._assign_parttime()
+   def generate(self):
+    """
+    V6 排班主流程：
+    先滿足硬性規則，再修正休假與碎班。
+    """
 
-        # 夜班先排，因為 N,N,off,off 會占用後續兩天休假。
-        self._assign_night_blocks()
+    # 1. 固定預排休、會議、預排班
+    self._apply_requests()
 
-        # 先補小夜再補白班，避免 E 後接 D。
-        self._assign_shift_by_need(SHIFT_E)
-        self._assign_shift_by_need(SHIFT_D)
-        self._fill_blank_with_off()
+    # 2. 固定半職郭珍君 10 天 D
+    self._assign_parttime()
 
-        # 多輪修復，但每一輪都不得破壞 R/M/預排/半職/N區塊。
-        for _ in range(8):
-            before = self._snapshot()
-            self._repair_manpower_shortage()
-            self._balance_holidays()
-            self._remove_single_day_fragments()
-            self._repair_night_blocks()
-            self._fill_blank_with_off()
-            if before == self._snapshot():
-                break
+    # 3. 先排大夜 N block：N → N → off → off
+    self._assign_night_blocks()
 
-        # 最後再補一次人力與休假，盡量降低違規。
+    # 4. 補足小夜
+    self._assign_shift_by_need(SHIFT_E)
+
+    # 5. 補足白班
+    self._assign_shift_by_need(SHIFT_D)
+
+    # 6. 空白先補 off
+    self._fill_blank_with_off()
+
+    # 7. 多輪硬性修復
+    for _ in range(5):
         self._repair_manpower_shortage()
-        self._balance_holidays()
         self._repair_night_blocks()
-        self._trim_parttime_to_target()
+        self._balance_holidays()
+        self._remove_single_day_fragments()
         self._fill_blank_with_off()
-        return self.schedule
 
+    # 8. 最後一次確保人力優先
+    self._repair_manpower_shortage()
+    self._repair_night_blocks()
+    self._fill_blank_with_off()
+
+    return self.schedule
     def _snapshot(self):
         return tuple(tuple(self.schedule[n]) for n in self.names)
 
