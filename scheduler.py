@@ -1,5 +1,5 @@
 """
-scheduler.py - 2F 護理排班系統 V6 核心
+scheduler.py - 2F 護理排班系統 V7 核心
 
 設計重點：
 1. 固定 R / M / 預排班不被後續流程覆蓋。
@@ -68,19 +68,25 @@ class NurseScheduler:
         self._fill_blank_with_off()
 
         # 多輪修復，但每一輪都不得破壞 R/M/預排/半職/N區塊。
-        for _ in range(8):
+        for _ in range(12):
             before = self._snapshot()
             self._repair_manpower_shortage()
             self._balance_holidays()
+            self._repair_weekly_holidays()
+            self._repair_streaks()
             self._remove_single_day_fragments()
+            self._repair_manpower_shortage()
             self._repair_night_blocks()
             self._fill_blank_with_off()
             if before == self._snapshot():
                 break
 
-        # 最後再補一次人力與休假，盡量降低違規。
-        self._repair_manpower_shortage()
+        # 最後收尾：先修休假/連班/碎班，再補一次人力，避免修完又缺人。
         self._balance_holidays()
+        self._repair_weekly_holidays()
+        self._repair_streaks()
+        self._remove_single_day_fragments()
+        self._repair_manpower_shortage()
         self._repair_night_blocks()
         self._trim_parttime_to_target()
         self._fill_blank_with_off()
@@ -331,12 +337,14 @@ class NurseScheduler:
                     break
 
     def _place_best_night_block_covering(self, target_day):
-        # 若要補 target_day 的 N，區塊可從 target_day 或 target_day-1 開始。
-        possible_starts = [target_day - 1, target_day]
-        self.random.shuffle(possible_starts)
+        """補 target_day 的 N。一定只放 N,N,off,off 區塊，不補單顆 N。"""
+        possible_starts = [target_day - 1, target_day, target_day + 1]
+        # target_day + 1 不能覆蓋 target_day，但可在月底/邊界時增加搜尋彈性；實際仍會檢查是否覆蓋。
         options = []
         for start in possible_starts:
-            if start < 0 or start >= self.days:
+            if start < 0 or start + 1 >= self.days:
+                continue
+            if target_day not in [start, start + 1]:
                 continue
             for nurse in self.names:
                 if self._is_parttime(nurse):
@@ -346,7 +354,14 @@ class NurseScheduler:
         if not options:
             return False
         self.random.shuffle(options)
-        options.sort(key=lambda x: (self._night_count(x[0]), self._workload(x[0]), -self._off_count(x[0])))
+        options.sort(
+            key=lambda x: (
+                self._night_count(x[0]),
+                self._workload(x[0]),
+                -self._off_count(x[0]),
+                abs(x[1] - target_day),
+            )
+        )
         nurse, start = options[0]
         self._place_night_block(nurse, start)
         return True
@@ -459,23 +474,37 @@ class NurseScheduler:
     # 修復與平衡
     # ============================================================
     def _repair_manpower_shortage(self):
-        for _ in range(6):
+        """修每日人力不足。N 永遠用 N,N,off,off 區塊補，不允許補單顆 N。"""
+        for _ in range(10):
             changed = False
+
+            # 先修 N，因為 N 區塊會鎖住後兩天 off，會影響 D/E。
             for day in range(self.days):
-                # N 只能用區塊補。
+                guard = 0
                 while self._shift_count(day, SHIFT_N) < self._min_req(day, SHIFT_N):
+                    guard += 1
+                    if guard > len(self.names) * 2:
+                        break
                     if self._place_best_night_block_covering(day):
                         changed = True
                     else:
                         break
 
+            # 再修 E / D。
+            for day in range(self.days):
                 for shift in [SHIFT_E, SHIFT_D]:
+                    guard = 0
                     while self._shift_count(day, shift) < self._min_req(day, shift):
+                        guard += 1
+                        if guard > len(self.names) * 2:
+                            break
                         candidates = self._clinical_candidates(day, shift)
                         if not candidates:
                             break
-                        self.schedule[candidates[0]][day] = shift
+                        nurse = candidates[0]
+                        self.schedule[nurse][day] = shift
                         changed = True
+
             if not changed:
                 break
 
@@ -532,6 +561,91 @@ class NurseScheduler:
             if not changed:
                 break
 
+    def _repair_weekly_holidays(self):
+        """每 7 天至少一天休。優先在不缺人、不破壞固定格的情況下補 off。"""
+        full_time = [n for n in self.names if self._is_fulltime(n)]
+        for _ in range(10):
+            changed = False
+            for nurse in full_time:
+                for start in range(0, self.days, 7):
+                    end = min(start + 7, self.days)
+                    block = self.schedule[nurse][start:end]
+                    if len(block) < 5 or any(x in REST_SHIFTS for x in block):
+                        continue
+                    days = list(range(start, end))
+                    self.random.shuffle(days)
+                    days.sort(key=lambda d: self._holiday_insert_score(nurse, d), reverse=True)
+                    for day in days:
+                        if self._try_make_off(nurse, day):
+                            changed = True
+                            break
+            if not changed:
+                break
+
+    def _repair_streaks(self):
+        """打斷超過 MAX_CONTINUOUS_WORK 的連續上班。"""
+        full_time = [n for n in self.names if self._is_fulltime(n)]
+        for _ in range(20):
+            changed = False
+            for nurse in full_time:
+                streaks = self._work_streak_ranges(nurse)
+                long_streaks = [r for r in streaks if r[1] - r[0] + 1 > MAX_CONTINUOUS_WORK]
+                if not long_streaks:
+                    continue
+                start, end = max(long_streaks, key=lambda r: r[1] - r[0])
+                days = list(range(start, end + 1))
+                mid = (start + end) / 2
+                self.random.shuffle(days)
+                days.sort(key=lambda d: (abs(d - mid), -self._holiday_insert_score(nurse, d)))
+                for day in days:
+                    if self._try_make_off(nurse, day):
+                        changed = True
+                        break
+            if not changed:
+                break
+
+    def _work_streak_ranges(self, nurse):
+        ranges = []
+        start = None
+        for day in range(self.days):
+            if self.schedule[nurse][day] in WORK_SHIFTS:
+                if start is None:
+                    start = day
+            else:
+                if start is not None:
+                    ranges.append((start, day - 1))
+                    start = None
+        if start is not None:
+            ranges.append((start, self.days - 1))
+        return ranges
+
+    def _holiday_insert_score(self, nurse, day):
+        shift = self.schedule[nurse][day]
+        score = 0
+        if shift in [SHIFT_D, SHIFT_E] and self._shift_count(day, shift) > self._min_req(day, shift):
+            score += 50
+        if day > 0 and self.schedule[nurse][day - 1] in REST_SHIFTS:
+            score += 8
+        if day < self.days - 1 and self.schedule[nurse][day + 1] in REST_SHIFTS:
+            score += 8
+        if self.locked[nurse][day]:
+            score -= 999
+        if shift == SHIFT_N:
+            score -= 999
+        return score
+
+    def _try_make_off(self, nurse, day):
+        """安全地把某格改成 off；只動 D/E，且不能造成該日低於最低人力。"""
+        shift = self.schedule[nurse][day]
+        if shift not in [SHIFT_D, SHIFT_E]:
+            return False
+        if not self._can_set_off(nurse, day):
+            return False
+        if self._shift_count(day, shift) <= self._min_req(day, shift):
+            return False
+        self.schedule[nurse][day] = SHIFT_OFF
+        return True
+
     def _days_sorted_for_holiday(self, nurse):
         days = list(range(self.days))
         self.random.shuffle(days)
@@ -550,8 +664,9 @@ class NurseScheduler:
         return days
 
     def _remove_single_day_fragments(self):
+        """修 off-D-off / off-E-off。先延伸成兩天，不能延伸才改 off。"""
         full_time = [n for n in self.names if self._is_fulltime(n)]
-        for _ in range(20):
+        for _ in range(30):
             changed = False
             for nurse in full_time:
                 for day in range(self.days):
@@ -565,21 +680,23 @@ class NurseScheduler:
                     if not (left_rest and right_rest):
                         continue
 
-                    # 先嘗試往後或往前延伸，形成 2 天以上連班。
+                    # 1) 優先往前/往後延伸成同班別 2 天。
                     extended = False
                     for nd in [day + 1, day - 1]:
-                        if 0 <= nd < self.days and self._can_assign(nurse, nd, cur, allow_overwrite_off=True):
-                            if self._shift_count(nd, cur) < self._max_req(nd, cur):
-                                self.schedule[nurse][nd] = cur
-                                changed = True
-                                extended = True
-                                break
+                        if not (0 <= nd < self.days):
+                            continue
+                        if self._shift_count(nd, cur) >= self._max_req(nd, cur):
+                            continue
+                        if self._can_assign(nurse, nd, cur, allow_overwrite_off=True):
+                            self.schedule[nurse][nd] = cur
+                            changed = True
+                            extended = True
+                            break
                     if extended:
                         continue
 
-                    # 若無法延伸，且人力高於最低值，才取消成 off。
-                    if self._can_set_off(nurse, day) and self._shift_count(day, cur) > self._min_req(day, cur):
-                        self.schedule[nurse][day] = SHIFT_OFF
+                    # 2) 不能延伸時，若不會造成缺人，就取消該碎班。
+                    if self._try_make_off(nurse, day):
                         changed = True
             if not changed:
                 break
