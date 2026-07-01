@@ -1,81 +1,86 @@
+"""
+scheduler.py - 2F 護理排班核心 V4
+
+設計重點：
+1. 兼職郭珍君只排 D，且盡量剛好 10 天。
+2. 大夜只用 N -> N -> off -> off 區塊，不直接塞單顆 N。
+3. D/E 補人力時不會抓兼職。
+4. 全職休假 >= 8 天優先保底，但不破壞固定 R/M/預排臨床班。
+5. E 後不可 D，N 後不可 D/E/M，最多連上 5 天。
+"""
+
 import random
-import statistics
-from copy import deepcopy
 from config import *
-from validator import validate_schedule
 
 
 class NurseScheduler:
-    def __init__(self, names, permissions, requests, manpower, history_shift, history_streak, seed=None):
+    def __init__(
+        self,
+        names,
+        permissions,
+        requests,
+        manpower,
+        history_shift,
+        history_streak,
+        seed=None,
+    ):
         self.names = list(names)
-        self.permissions = permissions
-        self.requests = requests
-        self.manpower = manpower
-        self.history_shift = history_shift
-        self.history_streak = history_streak
-        self.days = len(manpower)
+        self.permissions = permissions or {}
+        self.requests = requests or {}
+        self.manpower = manpower or []
+        self.history_shift = history_shift or {}
+        self.history_streak = history_streak or {}
+        self.days = len(self.manpower)
         self.random = random.Random(seed)
-        self.schedule = {
-            n: ["" for _ in range(self.days)]
-            for n in self.names
-        }
+        self.schedule = {n: ["" for _ in range(self.days)] for n in self.names}
 
-        self.night_locked = set()
-        # 鎖定兼職由 _assign_parttime 排出的 D，避免後續補人力又把兼職排超過 10 天
-        self.fixed_parttime_days = set()
+        for n in self.names:
+            self.requests.setdefault(n, [""] * self.days)
+            if len(self.requests[n]) < self.days:
+                self.requests[n] = self.requests[n] + [""] * (self.days - len(self.requests[n]))
 
+    # =========================================================
+    # 主流程
+    # =========================================================
     def generate(self):
         self._apply_requests()
-        self._assign_parttime()
+        self._protect_history_night_rest()
+        self._assign_parttime_exact_blocks()
         self._assign_night_blocks()
         self._assign_shift_by_need(SHIFT_E)
         self._assign_shift_by_need(SHIFT_D)
         self._fill_blank_with_off()
 
-        for _ in range(6):
-            self._enforce_night_pattern()
-            self._balance_holidays()
-            self._remove_single_day_fragments()
-            self._trim_parttime_extra_days()
-            self._repair_manpower_shortage()
-            self._recover_d_shortage()
+        for _ in range(8):
+            changed = False
+            changed |= self._repair_manpower_shortage()
+            changed |= self._normalize_night_blocks()
+            changed |= self._balance_holidays()
+            changed |= self._remove_single_day_fragments()
+            changed |= self._enforce_parttime_exact()
             self._fill_blank_with_off()
+            if not changed:
+                break
 
-        self._enforce_night_pattern()
-        self._balance_holidays()
-        self._recover_d_shortage()
-        self._remove_single_day_fragments()
-        self._recover_d_shortage()
-        self._fill_blank_with_off()
-        for nurse in full_time:
-        
-            while self._off_count(nurse) < MIN_FULLTIME_OFF_DAYS:
-        
-                candidates = []
-        
-                for day in range(self.days):
-        
-                    shift = self.schedule[nurse][day]
-        
-                    if shift not in CLINICAL_SHIFTS:
-                        continue
-        
-                    if self.requests[nurse][day] != "":
-                        continue
-        
-                    if self._shift_count(day, shift) - 1 >= self._min_req(day, shift):
-        
-                        candidates.append(day)
-        
-                if not candidates:
-                    break
-        
-                day = candidates[0]
-        
-                self.schedule[nurse][day] = SHIFT_OFF
+        self._final_cleanup()
         return self.schedule
 
-    # ---------- 基礎工具 ----------
+    # =========================================================
+    # 基礎工具
+    # =========================================================
+    def _is_full_time(self, nurse):
+        return nurse not in PART_TIME
+
+    def _is_fixed_request(self, nurse, day):
+        req = self.requests[nurse][day]
+        return req in [SHIFT_R, SHIFT_M] + CLINICAL_SHIFTS
+
+    def _is_work(self, shift):
+        return shift in WORK_SHIFTS
+
+    def _is_rest(self, shift):
+        return shift in REST_SHIFTS or shift == ""
+
     def _workload(self, nurse):
         return sum(1 for x in self.schedule[nurse] if x in WORK_SHIFTS)
 
@@ -84,6 +89,15 @@ class NurseScheduler:
 
     def _off_count(self, nurse):
         return sum(1 for x in self.schedule[nurse] if x in REST_SHIFTS or x == "")
+
+    def _shift_count(self, day, shift):
+        return sum(1 for n in self.names if self.schedule[n][day] == shift)
+
+    def _min_req(self, day, shift):
+        return int(self.manpower[day].get(f"{shift}_min", 0))
+
+    def _max_req(self, day, shift):
+        return int(self.manpower[day].get(f"{shift}_max", 999))
 
     def _prev(self, nurse, day):
         if day == 0:
@@ -97,7 +111,7 @@ class NurseScheduler:
 
     def _continuous_before(self, nurse, day):
         if day == 0:
-            return self.history_streak.get(nurse, 0)
+            return int(self.history_streak.get(nurse, 0) or 0)
         count = 0
         d = day - 1
         while d >= 0 and self.schedule[nurse][d] in WORK_SHIFTS:
@@ -105,57 +119,63 @@ class NurseScheduler:
             d -= 1
         return count
 
+    def _continuous_after(self, nurse, day):
+        count = 0
+        d = day + 1
+        while d < self.days and self.schedule[nurse][d] in WORK_SHIFTS:
+            count += 1
+            d += 1
+        return count
+
     def _permission_ok(self, nurse, shift):
+        if shift not in CLINICAL_SHIFTS:
+            return True
         if nurse in PART_TIME:
             return shift == PARTTIME_ALLOWED_SHIFT
-        return shift in self.permissions.get(nurse, "DEN")
+        return shift in str(self.permissions.get(nurse, "DEN")).upper()
 
     def _request_allows(self, nurse, day, shift):
-        req = self.requests.get(nurse, [""] * self.days)[day]
+        req = self.requests[nurse][day]
         if req == SHIFT_R:
             return False
-        if req in CLINICAL_SHIFTS + [SHIFT_M]:
+        if req in [SHIFT_M] + CLINICAL_SHIFTS:
             return req == shift
         return True
 
-    def _is_fixed_request(self, nurse, day):
-        req = self.requests.get(nurse, [""] * self.days)[day]
-        return req in [SHIFT_R, SHIFT_M] + CLINICAL_SHIFTS
+    def _is_history_night_rest_day(self, nurse, day):
+        """若上月最後已經連兩天以上 N，月初前兩天保護休假。"""
+        if self.history_shift.get(nurse) != SHIFT_N:
+            return False
+        streak = int(self.history_streak.get(nurse, 0) or 0)
+        return streak >= 2 and day in [0, 1]
 
     def _transition_ok(self, nurse, day, shift):
         prev = self._prev(nurse, day)
         if (prev, shift) in FORBIDDEN_TRANSITIONS:
             return False
-        # 若前一天是 N，只有第二天 N 或休假可接受；非夜班分配不准接在 N 後
         if prev == SHIFT_N and shift not in [SHIFT_N, SHIFT_OFF, SHIFT_R]:
             return False
-        # 若今天排 E，隔天若已固定 D，則不行
-        if day < self.days - 1 and shift == SHIFT_E and self.schedule[nurse][day + 1] == SHIFT_D:
-            return False
+        if shift == SHIFT_E and day < self.days - 1:
+            if self.schedule[nurse][day + 1] == SHIFT_D:
+                return False
         return True
 
     def _max_streak_ok(self, nurse, day, shift):
         if shift not in WORK_SHIFTS:
             return True
         before = self._continuous_before(nurse, day)
-        if before + 1 > MAX_CONTINUOUS_WORK:
-            return False
-        # 往後看已排好的連班
-        after = 0
-        d = day + 1
-        while d < self.days and self.schedule[nurse][d] in WORK_SHIFTS:
-            after += 1
-            d += 1
+        after = self._continuous_after(nurse, day)
         return before + 1 + after <= MAX_CONTINUOUS_WORK
 
     def _can_assign(self, nurse, day, shift, allow_overwrite_off=False):
         if day < 0 or day >= self.days:
             return False
-        # N,N,off,off 鎖定區不可再被 D/E 或其他修復流程覆蓋
-        if (nurse, day) in self.night_locked:
+        if self._is_history_night_rest_day(nurse, day) and shift in WORK_SHIFTS:
             return False
         cur = self.schedule[nurse][day]
-        if cur not in ["", SHIFT_OFF] or (cur == SHIFT_OFF and not allow_overwrite_off):
+        if cur not in ["", SHIFT_OFF]:
+            return False
+        if cur == SHIFT_OFF and not allow_overwrite_off:
             return False
         if self.requests[nurse][day] == SHIFT_R:
             return False
@@ -169,17 +189,16 @@ class NurseScheduler:
             return False
         return True
 
-    def _shift_count(self, day, shift):
-        return sum(1 for n in self.names if self.schedule[n][day] == shift)
+    def _can_turn_to_off(self, nurse, day):
+        if day < 0 or day >= self.days:
+            return False
+        if self.requests[nurse][day] != "":
+            return False
+        return self.schedule[nurse][day] in CLINICAL_SHIFTS
 
-    def _min_req(self, day, shift):
-        return self.manpower[day].get(f"{shift}_min", 0)
-
-    def _max_req(self, day, shift):
-        return self.manpower[day].get(f"{shift}_max", 999)
-
-    # ---------- 排班步驟 ----------
-    
+    # =========================================================
+    # 固定資料套用
+    # =========================================================
     def _apply_requests(self):
         for nurse in self.names:
             for day in range(self.days):
@@ -188,79 +207,117 @@ class NurseScheduler:
                     self.schedule[nurse][day] = SHIFT_R
                 elif req == SHIFT_M:
                     self.schedule[nurse][day] = SHIFT_M
-                elif req in CLINICAL_SHIFTS:
-                    if self._permission_ok(nurse, req):
-                        self.schedule[nurse][day] = req
+                elif req in CLINICAL_SHIFTS and self._permission_ok(nurse, req):
+                    self.schedule[nurse][day] = req
 
-    def _assign_parttime(self):
+    def _protect_history_night_rest(self):
+        for nurse in self.names:
+            if self.history_shift.get(nurse) == SHIFT_N and int(self.history_streak.get(nurse, 0) or 0) >= 2:
+                for day in [0, 1]:
+                    if day < self.days and self.schedule[nurse][day] == "" and self.requests[nurse][day] == "":
+                        self.schedule[nurse][day] = SHIFT_OFF
+
+    # =========================================================
+    # 兼職：郭珍君固定 10 天 D，優先 3/3/2/2 區塊
+    # =========================================================
+    def _assign_parttime_exact_blocks(self):
         for nurse in PART_TIME:
             if nurse not in self.names:
                 continue
 
-            # 固定預排的 D 先算入；若固定 D 已超過 PARTTIME_DAYS，不能任意刪除，只能保留並交由規則檢查提示
-            current = sum(1 for x in self.schedule[nurse] if x == PARTTIME_ALLOWED_SHIFT)
-            target = max(0, PARTTIME_DAYS - current)
+            # 清掉非固定的兼職班，避免前一輪或補班造成超過 10 天
+            for day in range(self.days):
+                if self.requests[nurse][day] == "" and self.schedule[nurse][day] == PARTTIME_ALLOWED_SHIFT:
+                    self.schedule[nurse][day] = ""
 
-            # 優先排 3,3,2,2 區塊，讓兼職不是碎班
+            fixed_d = sum(1 for d in range(self.days) if self.schedule[nurse][d] == PARTTIME_ALLOWED_SHIFT)
+            target = max(0, PARTTIME_DAYS - fixed_d)
             blocks = [3, 3, 2, 2]
+            self.random.shuffle(blocks)
+
             for block_len in blocks:
                 if target <= 0:
                     break
                 length = min(block_len, target)
                 starts = list(range(0, self.days - length + 1))
                 self.random.shuffle(starts)
-                starts.sort(
-                    key=lambda s: self._parttime_block_score(nurse, s, length),
-                    reverse=True
-                )
-
+                starts.sort(key=lambda s: self._parttime_block_score(nurse, s, length), reverse=True)
                 placed = False
                 for start in starts:
-                    days = list(range(start, start + length))
-                    # 避免跟既有兼職 D 緊貼，盡量維持區塊清楚
-                    before_ok = start == 0 or self.schedule[nurse][start - 1] != PARTTIME_ALLOWED_SHIFT
-                    after_ok = start + length >= self.days or self.schedule[nurse][start + length] != PARTTIME_ALLOWED_SHIFT
-                    if not (before_ok and after_ok):
-                        continue
+                    days = range(start, start + length)
                     if all(self._can_assign(nurse, d, PARTTIME_ALLOWED_SHIFT, allow_overwrite_off=True) for d in days):
                         for d in days:
                             self.schedule[nurse][d] = PARTTIME_ALLOWED_SHIFT
-                            self.fixed_parttime_days.add((nurse, d))
                         target -= length
                         placed = True
                         break
-
-                # 若找不到完整區塊，後面再單日補足
                 if not placed:
                     continue
 
-            # 若區塊排不滿，單日補滿到 10 天
-            for d in range(self.days):
-                if target <= 0:
+            # 若固定預排或不可排導致仍不足，才用連續性最佳的單日補足
+            while target > 0:
+                candidates = [d for d in range(self.days) if self._can_assign(nurse, d, PARTTIME_ALLOWED_SHIFT, allow_overwrite_off=True)]
+                if not candidates:
                     break
-                if self._can_assign(nurse, d, PARTTIME_ALLOWED_SHIFT, allow_overwrite_off=True):
-                    self.schedule[nurse][d] = PARTTIME_ALLOWED_SHIFT
-                    self.fixed_parttime_days.add((nurse, d))
-                    target -= 1
+                candidates.sort(key=lambda d: self._parttime_single_score(nurse, d), reverse=True)
+                self.schedule[nurse][candidates[0]] = PARTTIME_ALLOWED_SHIFT
+                target -= 1
 
-            self._trim_parttime_extra_days()
+            self._enforce_parttime_exact()
 
     def _parttime_block_score(self, nurse, start, length):
         score = 0
+        if start > 0 and self.schedule[nurse][start - 1] == PARTTIME_ALLOWED_SHIFT:
+            score += 5
+        if start + length < self.days and self.schedule[nurse][start + length] == PARTTIME_ALLOWED_SHIFT:
+            score += 5
         for d in range(start, start + length):
             if self._shift_count(d, SHIFT_D) < self._min_req(d, SHIFT_D):
                 score += 10
+            if self.requests[nurse][d] in [SHIFT_R, SHIFT_M]:
+                score -= 100
         return score
 
+    def _parttime_single_score(self, nurse, day):
+        score = 0
+        if day > 0 and self.schedule[nurse][day - 1] == PARTTIME_ALLOWED_SHIFT:
+            score += 8
+        if day < self.days - 1 and self.schedule[nurse][day + 1] == PARTTIME_ALLOWED_SHIFT:
+            score += 8
+        if self._shift_count(day, SHIFT_D) < self._min_req(day, SHIFT_D):
+            score += 10
+        return score
+
+    def _enforce_parttime_exact(self):
+        changed = False
+        for nurse in PART_TIME:
+            if nurse not in self.names:
+                continue
+            while sum(1 for x in self.schedule[nurse] if x == PARTTIME_ALLOWED_SHIFT) > PARTTIME_DAYS:
+                removable = [
+                    d for d in range(self.days)
+                    if self.schedule[nurse][d] == PARTTIME_ALLOWED_SHIFT and self.requests[nurse][d] == ""
+                ]
+                if not removable:
+                    break
+                # 優先移除不影響 D_min 的 D，且移除後較不形成碎班
+                removable.sort(key=lambda d: (self._shift_count(d, SHIFT_D) > self._min_req(d, SHIFT_D), -self._parttime_single_score(nurse, d)), reverse=True)
+                self.schedule[nurse][removable[0]] = SHIFT_OFF
+                changed = True
+        return changed
+
+    # =========================================================
+    # 大夜：只排 N,N,off,off
+    # =========================================================
     def _assign_night_blocks(self):
-        # 每天補 N_min；N 以 N,N,off,off 一組排
         for day in range(self.days):
-            while self._shift_count(day, SHIFT_N) < self._min_req(day, SHIFT_N):
+            guard = 0
+            while self._shift_count(day, SHIFT_N) < self._min_req(day, SHIFT_N) and guard < 30:
+                guard += 1
                 candidates = self._night_candidates(day)
                 if not candidates:
                     break
-                nurse = candidates[0]
-                self._place_night_block(nurse, day)
+                self._place_night_block(candidates[0], day)
 
     def _night_candidates(self, start_day):
         candidates = []
@@ -274,74 +331,111 @@ class NurseScheduler:
         return candidates
 
     def _can_place_night_block(self, nurse, start_day):
-        if start_day >= self.days:
+        if start_day < 0 or start_day + 3 >= self.days:
             return False
-        # N,N
+        if start_day > 0 and self.schedule[nurse][start_day - 1] == SHIFT_N:
+            return False
+        if self.history_shift.get(nurse) == SHIFT_N and start_day == 0 and int(self.history_streak.get(nurse, 0) or 0) >= 2:
+            return False
+
+        # N, N
         for d in [start_day, start_day + 1]:
             if self._shift_count(d, SHIFT_N) >= self._max_req(d, SHIFT_N) and self.schedule[nurse][d] != SHIFT_N:
                 return False
             if not self._can_assign(nurse, d, SHIFT_N, allow_overwrite_off=True):
                 return False
-        # off,off 不能覆蓋 R/M/固定臨床；可用月底不足時放寬
+
+        # off, off
         for d in [start_day + 2, start_day + 3]:
-            if d >= self.days:
-                continue
-            if self.schedule[nurse][d] not in ["", SHIFT_OFF]:
-                return False
             if self.requests[nurse][d] not in ["", SHIFT_OFF]:
+                return False
+            if self.schedule[nurse][d] not in ["", SHIFT_OFF]:
                 return False
         return True
 
     def _place_night_block(self, nurse, start_day):
-        # 固定成 N,N,off,off，並鎖定避免後續補人力破壞
-        if start_day >= self.days:
-            return
-
         self.schedule[nurse][start_day] = SHIFT_N
-        self.night_locked.add((nurse, start_day))
+        self.schedule[nurse][start_day + 1] = SHIFT_N
+        self.schedule[nurse][start_day + 2] = SHIFT_OFF
+        self.schedule[nurse][start_day + 3] = SHIFT_OFF
 
-        if start_day + 1 < self.days:
-            self.schedule[nurse][start_day + 1] = SHIFT_N
-            self.night_locked.add((nurse, start_day + 1))
+    def _normalize_night_blocks(self):
+        """修復單顆 N 或 N 後未休兩天。無法修復時，移除非固定 N。"""
+        changed = False
+        for nurse in [n for n in self.names if n not in PART_TIME]:
+            day = 0
+            while day < self.days:
+                if self.schedule[nurse][day] != SHIFT_N:
+                    day += 1
+                    continue
 
-        for d in [start_day + 2, start_day + 3]:
-            if d < self.days and self.requests[nurse][d] == "":
-                self.schedule[nurse][d] = SHIFT_OFF
-                self.night_locked.add((nurse, d))
+                ok = (
+                    day + 3 < self.days
+                    and self.schedule[nurse][day + 1] == SHIFT_N
+                    and self.schedule[nurse][day + 2] == SHIFT_OFF
+                    and self.schedule[nurse][day + 3] == SHIFT_OFF
+                )
+                if ok:
+                    day += 4
+                    continue
 
+                # 嘗試把 day 當成 block 起點修復
+                if day + 3 < self.days:
+                    can_fix = True
+                    for d, val in [(day + 1, SHIFT_N), (day + 2, SHIFT_OFF), (day + 3, SHIFT_OFF)]:
+                        if self.requests[nurse][d] != "" and self.requests[nurse][d] != val:
+                            can_fix = False
+                        if self.schedule[nurse][d] not in ["", SHIFT_OFF, val]:
+                            can_fix = False
+                    if can_fix and self._permission_ok(nurse, SHIFT_N):
+                        self.schedule[nurse][day + 1] = SHIFT_N
+                        self.schedule[nurse][day + 2] = SHIFT_OFF
+                        self.schedule[nurse][day + 3] = SHIFT_OFF
+                        changed = True
+                        day += 4
+                        continue
+
+                # 無法修，若不是固定預排 N，移除
+                if self.requests[nurse][day] == "" and self._shift_count(day, SHIFT_N) > self._min_req(day, SHIFT_N):
+                    self.schedule[nurse][day] = SHIFT_OFF
+                    changed = True
+                day += 1
+        return changed
+
+    # =========================================================
+    # D / E 補班
+    # =========================================================
     def _assign_shift_by_need(self, shift):
+        if shift == SHIFT_N:
+            self._assign_night_blocks()
+            return
         for day in range(self.days):
-            while self._shift_count(day, shift) < self._min_req(day, shift):
-                candidates = []
-                for nurse in self.names:
-
-                    if nurse in PART_TIME:
-                        continue
-                    if (nurse, day) in self.night_locked:
-                        continue
-                    if self._can_assign(nurse, day, shift, allow_overwrite_off=True):
-                        candidates.append(nurse)
+            guard = 0
+            while self._shift_count(day, shift) < self._min_req(day, shift) and guard < 30:
+                guard += 1
+                candidates = [
+                    n for n in self.names
+                    if n not in PART_TIME and self._can_assign(n, day, shift, allow_overwrite_off=True)
+                ]
                 if not candidates:
                     break
                 self.random.shuffle(candidates)
                 candidates.sort(key=lambda n: self._candidate_score(n, day, shift), reverse=True)
-                if shift == SHIFT_N:
-                    break
                 self.schedule[candidates[0]][day] = shift
 
     def _candidate_score(self, nurse, day, shift):
-        score = 0
+        score = 0.0
         if self._prev(nurse, day) == shift:
-            score += 8
+            score += 10
         if day < self.days - 1 and self.schedule[nurse][day + 1] == shift:
-            score += 6
+            score += 8
         if self._prev(nurse, day) in WORK_SHIFTS:
-            score += 4
-        score -= self._workload(nurse) * 1.5
-        if shift == SHIFT_E:
-            score -= sum(1 for x in self.schedule[nurse] if x == SHIFT_E) * 2
-        if shift == SHIFT_D:
-            score -= sum(1 for x in self.schedule[nurse] if x == SHIFT_D) * 1
+            score += 3
+        if shift == SHIFT_E and self._prev(nurse, day) == SHIFT_D:
+            score += 2
+        score -= self._workload(nurse) * 1.2
+        score -= sum(1 for x in self.schedule[nurse] if x == shift) * 1.5
+        score += self._off_count(nurse) * 0.2
         score += self.random.random()
         return score
 
@@ -349,401 +443,138 @@ class NurseScheduler:
         for nurse in self.names:
             for day in range(self.days):
                 if self.schedule[nurse][day] == "":
-                    if self.requests[nurse][day] == SHIFT_R:
-                        self.schedule[nurse][day] = SHIFT_R
-                    else:
-                        self.schedule[nurse][day] = SHIFT_OFF
+                    self.schedule[nurse][day] = SHIFT_R if self.requests[nurse][day] == SHIFT_R else SHIFT_OFF
 
-    # ---------- 修復與平衡 ----------
+    # =========================================================
+    # 修復：人力不足、休假不足、碎班
+    # =========================================================
     def _repair_manpower_shortage(self):
-        """補每日最低人力；不得破壞夜班鎖定與兼職規則。"""
-        for _ in range(8):
-            changed = False
-            for day in range(self.days):
-                for shift in [SHIFT_N, SHIFT_E, SHIFT_D]:
-                    while self._shift_count(day, shift) < self._min_req(day, shift):
-                        if shift == SHIFT_N:
-                            candidates = self._night_candidates(day)
-                            if not candidates:
-                                break
-                            self._place_night_block(candidates[0], day)
-                            changed = True
-                            continue
-
-                        # 第一輪：只找空白格；第二輪：才允許把一般 off 改成班
-                        candidates = [
-                            n for n in self.names
-                            if n not in PART_TIME
-                            and (n, day) not in self.night_locked
-                            and self.schedule[n][day] == ""
-                            and self._can_assign(n, day, shift, allow_overwrite_off=False)
-                        ]
-
-                        if not candidates:
-                            candidates = [
-                                n for n in self.names
-                                if n not in PART_TIME
-                                and (n, day) not in self.night_locked
-                                and self.schedule[n][day] == SHIFT_OFF
-                                and self._can_assign(n, day, shift, allow_overwrite_off=True)
-                            ]
-
-                        if not candidates:
-                            break
-
-                        self.random.shuffle(candidates)
-                        candidates.sort(key=lambda n: self._candidate_score(n, day, shift), reverse=True)
-                        self.schedule[candidates[0]][day] = shift
-                        changed = True
-
-            if not changed:
-                break
-
-    def _recover_d_shortage(self):
-        """最後強制補 D 班不足。"""
-
+        changed = False
         for day in range(self.days):
-
-            safety = 0
-
-            while self._shift_count(day, SHIFT_D) < self._min_req(day, SHIFT_D):
-
-                safety += 1
-
-                if safety > len(self.names) + 5:
-                    break
-
-                candidates = []
-
-                for nurse in self.names:
-
-                    if nurse in PART_TIME:
-                        continue
-
-                    if (nurse, day) in self.night_locked:
-                        continue
-
-                    if self.requests[nurse][day] in [SHIFT_R, SHIFT_M]:
-                        continue
-
-                    if self.schedule[nurse][day] != SHIFT_OFF:
-                        continue
-
-                    if not self._permission_ok(nurse, SHIFT_D):
-                        continue
-
-                    prev_shift = self._prev(nurse, day)
-
-                    # N 後不能直接接 D
-                    if prev_shift == SHIFT_N:
-                        continue
-
-                    candidates.append(nurse)
-
+            # N 只用 night block 修，不直接塞單顆 N
+            guard = 0
+            while self._shift_count(day, SHIFT_N) < self._min_req(day, SHIFT_N) and guard < 20:
+                guard += 1
+                candidates = self._night_candidates(day)
                 if not candidates:
                     break
+                self._place_night_block(candidates[0], day)
+                changed = True
 
-                candidates = [
-                    n for n in candidates
-                    if self._off_count(n) > MIN_FULLTIME_OFF_DAYS
-                ]
-                
-                if not candidates:
-                    break
-                
-                candidates.sort(
-                    key=lambda n: (
-                        self._off_count(n),
-                        -self._workload(n)
-                    ),
-                    reverse=True
-                )
-                self.schedule[candidates[0]][day] = SHIFT_D
-    def _trim_parttime_extra_days(self):
-        """兼職固定 PARTTIME_DAYS 天 D；只刪非預排、非鎖定的多餘 D。"""
-        for nurse in PART_TIME:
-            if nurse not in self.names:
-                continue
-            while sum(1 for x in self.schedule[nurse] if x == PARTTIME_ALLOWED_SHIFT) > PARTTIME_DAYS:
-                removable = [
-                    d for d in range(self.days - 1, -1, -1)
-                    if self.schedule[nurse][d] == PARTTIME_ALLOWED_SHIFT
-                    and self.requests[nurse][d] == ""
-                    and (nurse, d) not in self.fixed_parttime_days
-                ]
-                if not removable:
-                    # 若全部都是本次排入的鎖定日，仍可由月底往前刪，避免超過 10 天
-                    removable = [
-                        d for d in range(self.days - 1, -1, -1)
-                        if self.schedule[nurse][d] == PARTTIME_ALLOWED_SHIFT
-                        and self.requests[nurse][d] == ""
+            for shift in [SHIFT_E, SHIFT_D]:
+                guard = 0
+                while self._shift_count(day, shift) < self._min_req(day, shift) and guard < 20:
+                    guard += 1
+                    candidates = [
+                        n for n in self.names
+                        if n not in PART_TIME and self._can_assign(n, day, shift, allow_overwrite_off=True)
                     ]
-                if not removable:
-                    break
-                d = removable[0]
-                self.schedule[nurse][d] = SHIFT_OFF
-                self.fixed_parttime_days.discard((nurse, d))
-
-    def _enforce_night_pattern(self):
-        """強制夜班盡量維持 N,N,off,off；不覆蓋 R/M/預排班。"""
-        full_time = [n for n in self.names if n not in PART_TIME]
-
-        for nurse in full_time:
-            day = 0
-            while day < self.days:
-                if self.schedule[nurse][day] != SHIFT_N:
-                    day += 1
-                    continue
-
-                start = day
-                while day < self.days and self.schedule[nurse][day] == SHIFT_N:
-                    self.night_locked.add((nurse, day))
-                    day += 1
-                end = day
-                length = end - start
-
-                # 若只有單天 N，優先往後補成第 2 天 N
-                if length == 1:
-                    if (
-                        start + 1 < self.days
-                        and self.requests[nurse][start + 1] == ""
-                        and (nurse, start + 1) not in self.night_locked
-                        and self.schedule[nurse][start + 1] in ["", SHIFT_OFF]
-                        and self._shift_count(start + 1, SHIFT_N) < self._max_req(start + 1, SHIFT_N)
-                    ):
-                        self.schedule[nurse][start + 1] = SHIFT_N
-                        self.night_locked.add((nurse, start + 1))
-                        end = start + 2
-                    elif (
-                        start - 1 >= 0
-                        and self.requests[nurse][start - 1] == ""
-                        and (nurse, start - 1) not in self.night_locked
-                        and self.schedule[nurse][start - 1] in ["", SHIFT_OFF]
-                        and self._shift_count(start - 1, SHIFT_N) < self._max_req(start - 1, SHIFT_N)
-                    ):
-                        self.schedule[nurse][start - 1] = SHIFT_N
-                        self.night_locked.add((nurse, start - 1))
-                        start -= 1
-                        end = start + 2
-
-                # N 區塊後兩天固定 off；若原本是非預排班，直接轉 off，之後再由別人補人力
-                for off_day in [end, end + 1]:
-                    if off_day >= self.days:
-                        continue
-                    if self.requests[nurse][off_day] != "":
-                        continue
-                    if self.schedule[nurse][off_day] in CLINICAL_SHIFTS + ["", SHIFT_OFF]:
-                        self.schedule[nurse][off_day] = SHIFT_OFF
-                        self.night_locked.add((nurse, off_day))
+                    if not candidates:
+                        break
+                    self.random.shuffle(candidates)
+                    candidates.sort(key=lambda n: self._candidate_score(n, day, shift), reverse=True)
+                    self.schedule[candidates[0]][day] = shift
+                    changed = True
+        return changed
 
     def _balance_holidays(self):
+        changed = False
         full_time = [n for n in self.names if n not in PART_TIME]
 
         for _ in range(30):
-            changed = False
-            off_counts = {
-                n: sum(1 for x in self.schedule[n] if x in REST_SHIFTS)
-                for n in full_time
-            }
-            under = [
-                n for n in full_time
-                if off_counts[n] < MIN_FULLTIME_OFF_DAYS
-            ]
-
+            off_counts = {n: sum(1 for x in self.schedule[n] if x in REST_SHIFTS) for n in full_time}
+            under = [n for n in full_time if off_counts[n] < MIN_FULLTIME_OFF_DAYS]
             if not under:
                 break
-
             under.sort(key=lambda n: off_counts[n])
+            moved = False
 
             for nurse in under:
-                candidates = []
-
-                for day in range(self.days):
+                # A. 直接退掉多餘人力
+                days = list(range(self.days))
+                self.random.shuffle(days)
+                days.sort(key=lambda d: self._shift_count(d, self.schedule[nurse][d]) - self._min_req(d, self.schedule[nurse][d]) if self.schedule[nurse][d] in CLINICAL_SHIFTS else -999, reverse=True)
+                for day in days:
                     shift = self.schedule[nurse][day]
-
-                    if shift not in CLINICAL_SHIFTS:
+                    if shift not in CLINICAL_SHIFTS or not self._can_turn_to_off(nurse, day):
                         continue
-                    if self.requests[nurse][day] != "":
-                        continue
-                    if (nurse, day) in self.night_locked:
-                        continue
-
-                    # 拿掉這班後，該班仍不能低於最低人力
-                    if self._shift_count(day, shift) - 1 >= self._min_req(day, shift):
-                        candidates.append(day)
-
-                if candidates:
-                    candidates.sort(
-                        key=lambda d: self._fragment_penalty(nurse, d),
-                        reverse=True
-                    )
-                    d = candidates[0]
-                    self.schedule[nurse][d] = SHIFT_OFF
-                    changed = True
+                    if self._shift_count(day, shift) > self._min_req(day, shift):
+                        self.schedule[nurse][day] = SHIFT_OFF
+                        changed = moved = True
+                        break
+                if moved:
                     break
 
-                # 若不能直接休，找休假較多的人頂班
+                # B. 找休太多的人交換
                 for day in range(self.days):
                     shift = self.schedule[nurse][day]
-
-                    if shift not in CLINICAL_SHIFTS:
+                    if shift not in [SHIFT_D, SHIFT_E] or not self._can_turn_to_off(nurse, day):
                         continue
-                    if self.requests[nurse][day] != "":
-                        continue
-                    if (nurse, day) in self.night_locked:
-                        continue
-
                     helpers = [
                         h for h in full_time
                         if h != nurse
                         and off_counts.get(h, 0) > TARGET_FULLTIME_OFF_DAYS
-                        and (h, day) not in self.night_locked
                         and self._can_assign(h, day, shift, allow_overwrite_off=True)
                     ]
-
                     if helpers:
                         helpers.sort(key=lambda h: (-off_counts[h], self._workload(h)))
                         helper = helpers[0]
                         self.schedule[nurse][day] = SHIFT_OFF
                         self.schedule[helper][day] = shift
-                        changed = True
+                        changed = moved = True
                         break
-
-                if changed:
+                if moved:
                     break
 
-            if not changed:
+            if not moved:
                 break
 
-        # 最後強制補休：只拆「高於最低人力」且非預排、非夜班鎖定的班。
-        # 若無法直接拆，嘗試找其他同仁頂班。
-        for nurse in full_time:
-            off_count = sum(
-                1 for x in self.schedule[nurse]
-                if x in REST_SHIFTS
-            )
-
-            while off_count < MIN_FULLTIME_OFF_DAYS:
-                best_day = None
-
-                for day in range(self.days):
-                    shift = self.schedule[nurse][day]
-
-                    if shift not in CLINICAL_SHIFTS:
-                        continue
-                    if self.requests[nurse][day] != "":
-                        continue
-                    if (nurse, day) in self.night_locked:
-                        continue
-
-                    if self._shift_count(day, shift) - 1 >= self._min_req(day, shift):
-                        best_day = day
-                        break
-
-                if best_day is not None:
-                    self.schedule[nurse][best_day] = SHIFT_OFF
-                    off_count += 1
-                    continue
-
-                replaced = False
-
-                for day in range(self.days):
-                    shift = self.schedule[nurse][day]
-
-                    if shift not in CLINICAL_SHIFTS:
-                        continue
-                    if self.requests[nurse][day] != "":
-                        continue
-                    if (nurse, day) in self.night_locked:
-                        continue
-
-                    helpers = [
-                        h for h in full_time
-                        if h != nurse
-                        and (h, day) not in self.night_locked
-                        and self._can_assign(h, day, shift, allow_overwrite_off=True)
-                    ]
-
-                    if not helpers:
-                        continue
-
-                    helpers.sort(
-                        key=lambda h: (
-                            self._off_count(h),
-                            -self._workload(h)
-                        ),
-                        reverse=True
-                    )
-
-                    helper = helpers[0]
-                    self.schedule[nurse][day] = SHIFT_OFF
-                    self.schedule[helper][day] = shift
-                    off_count += 1
-                    replaced = True
-                    break
-
-                if not replaced:
-                    break
-
-    def _fragment_penalty(self, nurse, day):
-        cur = self.schedule[nurse][day]
-        left = SHIFT_OFF if day == 0 else self.schedule[nurse][day - 1]
-        right = SHIFT_OFF if day == self.days - 1 else self.schedule[nurse][day + 1]
-        score = 0
-        if left in REST_SHIFTS and right in REST_SHIFTS:
-            score += 10
-        if cur == SHIFT_D:
-            score += 1
-        return score
+        return changed
 
     def _remove_single_day_fragments(self):
+        changed = False
         full_time = [n for n in self.names if n not in PART_TIME]
-        rest_values = {
-            SHIFT_OFF,
-            SHIFT_R
-        }
-
-        for _ in range(10):
-            changed = False
+        for _ in range(20):
+            loop_changed = False
             for nurse in full_time:
                 for day in range(self.days):
                     cur = self.schedule[nurse][day]
-                    if cur not in CLINICAL_SHIFTS:
+                    if cur not in [SHIFT_D, SHIFT_E]:
                         continue
-                    if (nurse, day) in self.night_locked:
-                        continue
-
-                    left = SHIFT_OFF if day == 0 else self.schedule[nurse][day - 1]
-                    right = SHIFT_OFF if day == self.days - 1 else self.schedule[nurse][day + 1]
-                    left_rest = left in rest_values
-                    right_rest = right in rest_values
+                    left_rest = day == 0 or self.schedule[nurse][day - 1] in REST_SHIFTS
+                    right_rest = day == self.days - 1 or self.schedule[nurse][day + 1] in REST_SHIFTS
                     if not (left_rest and right_rest):
                         continue
 
-                    # 非預排且當日人力有餘，直接改 off
-                    if (
-                        self.requests[nurse][day] == ""
-                        and self._shift_count(day, cur) - 1 >= self._min_req(day, cur)
-                    ):
-                    
+                    if self._can_turn_to_off(nurse, day) and self._shift_count(day, cur) > self._min_req(day, cur):
                         self.schedule[nurse][day] = SHIFT_OFF
-                    
-                        continue
-                        self.schedule[nurse][day] = SHIFT_OFF
-                        changed = True
+                        changed = loop_changed = True
                         continue
 
-                    # 無法取消時，嘗試往前/後延長同班，避免 1 天碎班
                     for nd in [day + 1, day - 1]:
                         if 0 <= nd < self.days and self._can_assign(nurse, nd, cur, allow_overwrite_off=True):
                             if self._shift_count(nd, cur) < self._max_req(nd, cur):
                                 self.schedule[nurse][nd] = cur
-                                changed = True
+                                changed = loop_changed = True
                                 break
-            if not changed:
+            if not loop_changed:
                 break
+        return changed
+
+    def _final_cleanup(self):
+        self._normalize_night_blocks()
+        self._enforce_parttime_exact()
+        self._fill_blank_with_off()
 
 
 def build_schedule_once(names, permissions, requests, manpower, history_shift, history_streak, seed=None):
-    scheduler = NurseScheduler(names, permissions, requests, manpower, history_shift, history_streak, seed=seed)
+    scheduler = NurseScheduler(
+        names,
+        permissions,
+        requests,
+        manpower,
+        history_shift,
+        history_streak,
+        seed=seed,
+    )
     return scheduler.generate()
