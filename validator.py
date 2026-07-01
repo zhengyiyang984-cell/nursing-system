@@ -333,3 +333,23 @@ def issues_to_dataframe(issues, date_headers=None):
             "嚴重度": item.get("severity", "warning"),
         })
     return pd.DataFrame(rows)
+
+
+def daily_manpower_dataframe(schedule, names, manpower, date_headers=None):
+    """輸出每日 D/E/N 實際人力與 Min/Max，供 UI 或除錯使用。"""
+    rows = []
+    date_headers = date_headers or []
+    for day in range(len(manpower)):
+        row = {
+            "日期": date_headers[day] if day < len(date_headers) else f"第 {day + 1} 天",
+        }
+        for shift in CLINICAL_SHIFTS:
+            actual = _shift_count(schedule, names, day, shift)
+            min_req = int(manpower[day].get(f"{shift}_min", 0) or 0)
+            max_req = int(manpower[day].get(f"{shift}_max", 999) or 999)
+            row[f"{shift}_實際"] = actual
+            row[f"{shift}_Min"] = min_req
+            row[f"{shift}_Max"] = max_req
+            row[f"{shift}_狀態"] = "不足" if actual < min_req else ("超過" if actual > max_req else "OK")
+        rows.append(row)
+    return pd.DataFrame(rows)
