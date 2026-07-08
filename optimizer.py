@@ -42,12 +42,9 @@ def score_schedule(schedule, names, manpower, history_shift, requests, history_s
         for shift in CLINICAL_SHIFTS:
             actual = _shift_count(schedule, names, day, shift)
             min_req = int(manpower[day].get(f"{shift}_min", 0) or 0)
-            max_req = int(manpower[day].get(f"{shift}_max", 999) or 999)
+
             if actual < min_req:
                 score -= (min_req - actual) * 20000
-            if actual > max_req:
-                score -= (actual - max_req) * 2000
-
     # 2) 規則違規扣分。
     for issue in issues:
         category = str(issue.get("category", ""))
