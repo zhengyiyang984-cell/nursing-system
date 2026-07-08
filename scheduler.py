@@ -68,7 +68,7 @@ class NurseScheduler:
         self._fill_blank_with_off()
 
         # 多輪修復，但每一輪都不得破壞 R/M/預排/半職/N區塊。
-        for _ in range(8):
+        for _ in range(3):
             before = self._snapshot()
             self._repair_manpower_shortage()
             self._balance_holidays()
