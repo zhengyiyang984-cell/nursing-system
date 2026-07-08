@@ -656,9 +656,9 @@ class NurseScheduler:
                     for nd in [day + 1, day - 1]:
                         if 0 <= nd < self.days and self._can_assign(nurse, nd, cur, allow_overwrite_off=True):
                             self.schedule[nurse][nd] = cur
-                                changed = True
-                                extended = True
-                                break
+                            changed = True
+                            extended = True
+                            break
                     if extended:
                         continue
 
