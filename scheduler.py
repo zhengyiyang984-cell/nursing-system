@@ -83,6 +83,10 @@ class NurseScheduler:
         self._repair_manpower_shortage(max_rounds=1)
         self._trim_parttime_to_target()
         self._fill_blank_with_off()
+
+        # 最後收尾：專門修 E→D 與一日碎班，不改 app.py 的介面。
+        self._final_repair(max_rounds=3)
+        self._fill_blank_with_off()
         return self.schedule
 
     def _snapshot(self):
@@ -703,6 +707,138 @@ class NurseScheduler:
                         changed = True
             if not changed:
                 break
+
+
+    # ============================================================
+    # Final Repair：最後只修 E→D 與一日碎班
+    # ============================================================
+    def _final_repair(self, max_rounds=3):
+        """
+        最後收尾修復：
+        1. 修 E→D 銜接違規。
+        2. 再跑一日碎班修復。
+        3. 修完後補最低人力，避免修復造成缺人。
+        有 guard，不會讓 Streamlit 卡住。
+        """
+        for _ in range(max_rounds):
+            before = self._snapshot()
+
+            self._repair_e_to_d_transitions()
+            self._remove_single_day_fragments()
+            self._repair_manpower_shortage(max_rounds=1)
+            self._repair_e_to_d_transitions()
+            self._fill_blank_with_off()
+
+            if before == self._snapshot():
+                break
+
+    def _can_change_existing_shift(self, nurse, day, new_shift):
+        """
+        檢查已排好的 D/E 是否可改成另一個 D/E/off。
+        不動預排、R/M、夜班區塊與半職。
+        """
+        if day < 0 or day >= self.days:
+            return False
+        if self._is_parttime(nurse):
+            return False
+        if self.locked[nurse][day] or self.night_locked[nurse][day]:
+            return False
+
+        old_shift = self.schedule[nurse][day]
+        if old_shift not in [SHIFT_D, SHIFT_E, SHIFT_OFF, ""]:
+            return False
+
+        if new_shift == SHIFT_OFF:
+            return self._can_set_off(nurse, day)
+
+        if new_shift not in [SHIFT_D, SHIFT_E]:
+            return False
+        if not self._permission_ok(nurse, new_shift):
+            return False
+        if not self._request_allows(nurse, day, new_shift):
+            return False
+
+        original = self.schedule[nurse][day]
+        self.schedule[nurse][day] = SHIFT_OFF
+        ok = (
+            self._transition_ok(nurse, day, new_shift)
+            and self._max_streak_ok(nurse, day, new_shift)
+        )
+        self.schedule[nurse][day] = original
+        return ok
+
+    def _find_helper_for_shift(self, avoid_nurse, day, shift):
+        """找一位 off 的全職同仁補上指定班別，避免修正後低於最低人力。"""
+        helpers = []
+        for helper in self.names:
+            if helper == avoid_nurse or self._is_parttime(helper):
+                continue
+            if self._can_assign(helper, day, shift, allow_overwrite_off=True):
+                helpers.append(helper)
+
+        self.random.shuffle(helpers)
+        helpers.sort(key=lambda h: (self._workload(h), self._shift_workload(h, shift)))
+        return helpers[0] if helpers else None
+
+    def _repair_e_to_d_transitions(self):
+        """
+        修正 E 後接 D：
+        優先把 D 改成 E；若會造成 D 缺人，就找 helper 補 D。
+        不行時，才嘗試把 D 改 off，或把前一天 E 改 off。
+        """
+        changed = False
+
+        for nurse in self.names:
+            if not self._is_fulltime(nurse):
+                continue
+
+            for day in range(1, self.days):
+                if self.schedule[nurse][day - 1] != SHIFT_E:
+                    continue
+                if self.schedule[nurse][day] != SHIFT_D:
+                    continue
+
+                # A. D 改成 E；若 D 不足，找 helper 補 D。
+                if self._can_change_existing_shift(nurse, day, SHIFT_E):
+                    if self._day_has_surplus(day, SHIFT_D):
+                        self.schedule[nurse][day] = SHIFT_E
+                        changed = True
+                        continue
+
+                    helper = self._find_helper_for_shift(nurse, day, SHIFT_D)
+                    if helper:
+                        self.schedule[nurse][day] = SHIFT_E
+                        self.schedule[helper][day] = SHIFT_D
+                        changed = True
+                        continue
+
+                # B. D 改 off；只在人力仍足夠時做。
+                if self._day_has_surplus(day, SHIFT_D) and self._can_change_existing_shift(nurse, day, SHIFT_OFF):
+                    self.schedule[nurse][day] = SHIFT_OFF
+                    changed = True
+                    continue
+
+                # C. 前一天 E 改 off；只在人力仍足夠時做。
+                prev_day = day - 1
+                if (
+                    self._day_has_surplus(prev_day, SHIFT_E)
+                    and self._can_change_existing_shift(nurse, prev_day, SHIFT_OFF)
+                ):
+                    self.schedule[nurse][prev_day] = SHIFT_OFF
+                    changed = True
+                    continue
+
+                # D. 前一天 E 改 D；只在 E 有餘裕時做。
+                if (
+                    self._day_has_surplus(prev_day, SHIFT_E)
+                    and self._can_change_existing_shift(nurse, prev_day, SHIFT_D)
+                ):
+                    self.schedule[nurse][prev_day] = SHIFT_D
+                    changed = True
+                    continue
+
+        return changed
+
 
 
 def build_schedule_once(names, permissions, requests, manpower, history_shift, history_streak, seed=None):
