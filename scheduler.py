@@ -75,7 +75,9 @@ class NurseScheduler:
 
             self._restore_locked_requests()
             self._repair_fixed_night_requests()
+            self._repair_single_nights_aggressive()
             self._repair_night_blocks()
+            self._repair_parttime_limit()
             self._repair_manpower_shortage(max_rounds=3)
             self._balance_holidays()
             self._repair_long_streaks()
@@ -83,6 +85,7 @@ class NurseScheduler:
             self._repair_e_to_d_transitions()
             self._remove_single_day_fragments()
             self._trim_parttime_to_target()
+            self._repair_parttime_limit()
             self._fill_blank_with_off()
 
             if before == self._snapshot():
@@ -92,11 +95,14 @@ class NurseScheduler:
         for _ in range(5):
             self._restore_locked_requests()
             self._repair_fixed_night_requests()
+            self._repair_single_nights_aggressive()
             self._repair_night_blocks()
+            self._repair_parttime_limit()
             self._repair_manpower_shortage(max_rounds=3)
             self._balance_holidays()
             self._repair_long_streaks()
             self._repair_manpower_shortage(max_rounds=2)
+            self._repair_parttime_limit()
             self._fill_blank_with_off()
 
         return self.schedule
@@ -209,6 +215,12 @@ class NurseScheduler:
         if cur not in ["", SHIFT_OFF]:
             return False
 
+        if self._is_parttime(nurse):
+            if shift != PARTTIME_ALLOWED_SHIFT:
+                return False
+            if self._shift_workload(nurse, PARTTIME_ALLOWED_SHIFT) >= PARTTIME_DAYS:
+                return False
+
         if not self._permission_ok(nurse, shift):
             return False
         if not self._transition_ok(nurse, day, shift):
@@ -295,7 +307,6 @@ class NurseScheduler:
                     if self._can_place_parttime_block(nurse, start, length):
                         for d in range(start, start + length):
                             self.schedule[nurse][d] = PARTTIME_ALLOWED_SHIFT
-                            self.locked[nurse][d] = True
                         remaining -= length
                         break
 
@@ -305,7 +316,6 @@ class NurseScheduler:
                     break
                 if self._can_assign(nurse, day, PARTTIME_ALLOWED_SHIFT, allow_overwrite_off=True, relax_streak=True):
                     self.schedule[nurse][day] = PARTTIME_ALLOWED_SHIFT
-                    self.locked[nurse][day] = True
                     remaining -= 1
 
             self._trim_parttime_to_target(nurse)
@@ -504,6 +514,157 @@ class NurseScheduler:
                 else:
                     self.schedule[nurse][d] = SHIFT_OFF
                     self.night_locked[nurse][d] = True
+
+
+    def _make_cell_available_for_night(self, nurse, day):
+        if day < 0 or day >= self.days:
+            return False
+        if self.schedule[nurse][day] in ["", SHIFT_OFF, SHIFT_R]:
+            return True
+        if self.schedule[nurse][day] == SHIFT_N:
+            return True
+        if self.locked[nurse][day] or self.night_locked[nurse][day]:
+            return False
+        if self._fixed_request(nurse, day):
+            return False
+
+        cur = self.schedule[nurse][day]
+        if cur in [SHIFT_D, SHIFT_E]:
+            if self._day_has_surplus(day, cur):
+                self.schedule[nurse][day] = SHIFT_OFF
+                return True
+            return self._swap_to_make_off(nurse, day, cur)
+        return False
+
+    def _force_night_block_for_nurse(self, nurse, start):
+        if start < 0 or start + 1 >= self.days:
+            return False
+        if self._is_parttime(nurse) or not self._permission_ok(nurse, SHIFT_N):
+            return False
+        if self._prev(nurse, start) in [SHIFT_D, SHIFT_E, SHIFT_M]:
+            return False
+
+        backup_row = list(self.schedule[nurse])
+        backup_night = list(self.night_locked[nurse])
+        backup_lock = list(self.locked[nurse])
+
+        for d in [start, start + 1]:
+            if self.schedule[nurse][d] == SHIFT_N:
+                continue
+            if self._fixed_request(nurse, d):
+                return False
+            if not self._make_cell_available_for_night(nurse, d):
+                return False
+
+        for d in [start + 2, start + 3]:
+            if d >= self.days:
+                continue
+            req = self._req(nurse, d)
+            if req == SHIFT_R:
+                self.schedule[nurse][d] = SHIFT_R
+                self.locked[nurse][d] = True
+                continue
+            if self._fixed_request(nurse, d):
+                self.schedule[nurse] = backup_row
+                self.night_locked[nurse] = backup_night
+                self.locked[nurse] = backup_lock
+                return False
+            if self.schedule[nurse][d] in REST_SHIFTS:
+                continue
+
+            cur = self.schedule[nurse][d]
+            if cur in [SHIFT_D, SHIFT_E]:
+                if self._day_has_surplus(d, cur):
+                    self.schedule[nurse][d] = SHIFT_OFF
+                elif not self._swap_to_make_off(nurse, d, cur):
+                    self.schedule[nurse] = backup_row
+                    self.night_locked[nurse] = backup_night
+                    self.locked[nurse] = backup_lock
+                    return False
+            else:
+                self.schedule[nurse] = backup_row
+                self.night_locked[nurse] = backup_night
+                self.locked[nurse] = backup_lock
+                return False
+
+        self._place_night_block(nurse, start)
+        return True
+
+    def _repair_single_nights_aggressive(self):
+        for nurse in self.names:
+            if self._is_parttime(nurse):
+                continue
+            for day in range(self.days):
+                if self.schedule[nurse][day] != SHIFT_N:
+                    continue
+                left_n = day > 0 and self.schedule[nurse][day - 1] == SHIFT_N
+                right_n = day + 1 < self.days and self.schedule[nurse][day + 1] == SHIFT_N
+                if left_n or right_n:
+                    continue
+                for start in [day, day - 1]:
+                    if self._force_night_block_for_nurse(nurse, start):
+                        break
+
+    def _find_helper_for_day_shift(self, day, shift, avoid=None):
+        helpers = []
+        for helper in self.names:
+            if helper == avoid or self._is_parttime(helper):
+                continue
+            if self.schedule[helper][day] != SHIFT_OFF:
+                continue
+            if self.locked[helper][day] or self.night_locked[helper][day]:
+                continue
+            if self._fixed_request(helper, day):
+                continue
+            if not self._permission_ok(helper, shift):
+                continue
+
+            original = self.schedule[helper][day]
+            self.schedule[helper][day] = SHIFT_OFF
+            ok = self._transition_ok(helper, day, shift)
+            self.schedule[helper][day] = original
+            if ok:
+                helpers.append((self._workload(helper), self._shift_workload(helper, shift), self.random.random(), helper))
+
+        if not helpers:
+            return None
+        helpers.sort()
+        return helpers[0][-1]
+
+    def _repair_parttime_limit(self):
+        for nurse in [n for n in PART_TIME if n in self.names]:
+            guard = 0
+            while self._shift_workload(nurse, PARTTIME_ALLOWED_SHIFT) > PARTTIME_DAYS:
+                guard += 1
+                if guard > self.days:
+                    break
+
+                days = [
+                    d for d in range(self.days)
+                    if self.schedule[nurse][d] == PARTTIME_ALLOWED_SHIFT and not self.locked[nurse][d]
+                ]
+                if not days:
+                    break
+
+                days.sort(key=lambda d: (0 if self._day_has_surplus(d, PARTTIME_ALLOWED_SHIFT) else 1, d))
+                changed = False
+
+                for day in days:
+                    if self._day_has_surplus(day, PARTTIME_ALLOWED_SHIFT):
+                        self.schedule[nurse][day] = SHIFT_OFF
+                        changed = True
+                        break
+
+                    helper = self._find_helper_for_day_shift(day, PARTTIME_ALLOWED_SHIFT, avoid=nurse)
+                    if helper:
+                        self.schedule[helper][day] = PARTTIME_ALLOWED_SHIFT
+                        self.schedule[nurse][day] = SHIFT_OFF
+                        changed = True
+                        break
+
+                if not changed:
+                    break
+
 
     def _repair_night_blocks(self):
         for nurse in self.names:
