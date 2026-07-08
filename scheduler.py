@@ -503,49 +503,49 @@ class NurseScheduler:
     # ============================================================
     # 修復與平衡
     # ============================================================
-def _repair_manpower_shortage(self):
-    """重寫：人力達標優先；N 只能用 N,N,off,off，D/E 可用 off 人員補。"""
-
-    for _ in range(10):
-        changed = False
-
-        for day in range(self.days):
-
-            guard = 0
-            while self._shift_count(day, SHIFT_N) < self._min_req(day, SHIFT_N):
-                guard += 1
-                if guard > len(self.names):
-                    break
-
-                if self._place_best_night_block_covering(day):
-                    changed = True
-                else:
-                    break
-
-            for shift in [SHIFT_E, SHIFT_D]:
-
+    def _repair_manpower_shortage(self):
+        """重寫：人力達標優先；N 只能用 N,N,off,off，D/E 可用 off 人員補。"""
+    
+        for _ in range(10):
+            changed = False
+    
+            for day in range(self.days):
+    
                 guard = 0
-                while self._shift_count(day, shift) < self._min_req(day, shift):
+                while self._shift_count(day, SHIFT_N) < self._min_req(day, SHIFT_N):
                     guard += 1
                     if guard > len(self.names):
                         break
-
-                    candidates = self._clinical_candidates(day, shift)
-                    if candidates:
-                        self.schedule[candidates[0]][day] = shift
+    
+                    if self._place_best_night_block_covering(day):
                         changed = True
-                        continue
-
-                    rescue = self._rescue_candidate(day, shift)
-                    if rescue:
-                        self.schedule[rescue][day] = shift
-                        changed = True
-                        continue
-
-                    break
-
-        if not changed:
-            break
+                    else:
+                        break
+    
+                for shift in [SHIFT_E, SHIFT_D]:
+    
+                    guard = 0
+                    while self._shift_count(day, shift) < self._min_req(day, shift):
+                        guard += 1
+                        if guard > len(self.names):
+                            break
+    
+                        candidates = self._clinical_candidates(day, shift)
+                        if candidates:
+                            self.schedule[candidates[0]][day] = shift
+                            changed = True
+                            continue
+    
+                        rescue = self._rescue_candidate(day, shift)
+                        if rescue:
+                            self.schedule[rescue][day] = shift
+                            changed = True
+                            continue
+    
+                        break
+    
+            if not changed:
+                break
 
     def _rescue_candidate(self, day, shift):
         candidates = []
