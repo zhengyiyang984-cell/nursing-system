@@ -622,6 +622,9 @@ class NurseScheduler:
                 if self._create_holiday(nurse, 0, self.days, off_counts):
                     changed = True
                     break
+                if self._force_make_holiday(nurse):
+                    changed = True
+                    break
             if not changed:
                 break
 
@@ -668,6 +671,8 @@ class NurseScheduler:
                 continue
             if off_counts is not None and off_counts.get(helper, 0) <= TARGET_FULLTIME_OFF_DAYS:
                 continue
+            if self.schedule[helper][day] != SHIFT_OFF:
+                continue
             if self._can_assign(helper, day, shift, allow_overwrite_off=True):
                 helpers.append(helper)
         if not helpers:
@@ -678,6 +683,21 @@ class NurseScheduler:
         self.schedule[nurse][day] = SHIFT_OFF
         self.schedule[helper][day] = shift
         return True
+
+    def _force_make_holiday(self, nurse):
+        for day in self._holiday_candidate_days(nurse, 0, self.days):
+            shift = self.schedule[nurse][day]
+            if shift not in [SHIFT_D, SHIFT_E]:
+                continue
+            if not self._can_set_off(nurse, day):
+                continue
+            helper = self._find_helper_for_shift(nurse, day, shift)
+            if helper is None:
+                continue
+            self.schedule[helper][day] = shift
+            self.schedule[nurse][day] = SHIFT_OFF
+            return True
+        return False
 
     def _remove_single_day_fragments(self):
         for _ in range(8):
@@ -726,6 +746,8 @@ class NurseScheduler:
             self._repair_e_to_d_transitions()
             self._remove_single_day_fragments()
             self._repair_manpower_shortage(max_rounds=1)
+            self._balance_holidays()
+            self._repair_manpower_shortage(max_rounds=1)
             self._repair_e_to_d_transitions()
             self._fill_blank_with_off()
 
@@ -772,6 +794,8 @@ class NurseScheduler:
         helpers = []
         for helper in self.names:
             if helper == avoid_nurse or self._is_parttime(helper):
+                continue
+            if self.schedule[helper][day] != SHIFT_OFF:
                 continue
             if self._can_assign(helper, day, shift, allow_overwrite_off=True):
                 helpers.append(helper)
