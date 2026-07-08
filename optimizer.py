@@ -30,36 +30,34 @@ def _is_fixed_request(requests, nurse, day):
 
 
 def score_schedule(schedule, names, manpower, history_shift, requests, history_streak=None):
-    """
-    分數越高越好。
-    優先順序：人力達標 > 大夜規則/硬性規則 > 夜班平均 > 白班平均 > 工作量平均。
-    """
     issues = validate_schedule(schedule, names, manpower, history_shift, requests, history_streak)
     score = 1_000_000.0
 
-    # 1) 人力優先：缺人是最大扣分，超人次之。
+    # 人力不足是最高優先
     for day in range(len(manpower)):
         for shift in CLINICAL_SHIFTS:
             actual = _shift_count(schedule, names, day, shift)
             min_req = int(manpower[day].get(f"{shift}_min", 0) or 0)
-
             if actual < min_req:
-                score -= (min_req - actual) * 20000
-    # 2) 規則違規扣分。
+                score -= (min_req - actual) * 30000
+
+    # 規則違規扣分
     for issue in issues:
         category = str(issue.get("category", ""))
         message = str(issue.get("message", ""))
         severity = issue.get("severity", "warning")
         if "每日人力" in category or "低於最低" in message:
-            score -= 20000
+            score -= 30000
         elif "大夜" in category or "N→N→off→off" in message:
+            score -= 15000
+        elif "休假不足" in category or "連續上班" in category:
             score -= 12000
         elif severity == "error":
-            score -= 8000
+            score -= 9000
         elif "碎班" in category:
-            score -= 800
+            score -= 700
         else:
-            score -= 500
+            score -= 400
 
     full_time = _full_time(names)
     if full_time:
@@ -67,8 +65,6 @@ def score_schedule(schedule, names, manpower, history_shift, requests, history_s
         day_counts = [sum(1 for x in schedule[n] if x == SHIFT_D) for n in full_time]
         work_counts = [sum(1 for x in schedule[n] if x in WORK_SHIFTS) for n in full_time]
         off_counts = [sum(1 for x in schedule[n] if x in REST_SHIFTS) for n in full_time]
-
-        # 3) 公平性：夜班最重要，其次白班，再來總工作量與休假。
         score -= safe_stdev(night_counts) * 1600
         score -= safe_stdev(day_counts) * 900
         score -= safe_stdev(work_counts) * 700
@@ -78,22 +74,27 @@ def score_schedule(schedule, names, manpower, history_shift, requests, history_s
 
 
 def _try_move_shift(schedule, names, requests, manpower, shift, day, rng):
-    """Local Search：把超編日的人移到缺人日，或交換同班別，改善人力與平均。"""
     min_req = int(manpower[day].get(f"{shift}_min", 0) or 0)
     if _shift_count(schedule, names, day, shift) >= min_req:
         return False
 
-    # 找其他日該班別超編的人，搬到缺人日；不動預排固定格。
     donor_days = list(range(len(manpower)))
     rng.shuffle(donor_days)
-    donor_days.sort(key=lambda d: _shift_count(schedule, names, d, shift) - int(manpower[d].get(f"{shift}_min", 0) or 0), reverse=True)
-
+    donor_days.sort(
+        key=lambda d: _shift_count(schedule, names, d, shift) - int(manpower[d].get(f"{shift}_min", 0) or 0),
+        reverse=True,
+    )
     for from_day in donor_days:
         if from_day == day:
             continue
         if _shift_count(schedule, names, from_day, shift) <= int(manpower[from_day].get(f"{shift}_min", 0) or 0):
             continue
-        donors = [n for n in names if n not in PART_TIME and schedule[n][from_day] == shift and not _is_fixed_request(requests, n, from_day)]
+        donors = [
+            n for n in names
+            if n not in PART_TIME
+            and schedule[n][from_day] == shift
+            and not _is_fixed_request(requests, n, from_day)
+        ]
         rng.shuffle(donors)
         donors.sort(key=lambda n: sum(1 for x in schedule[n] if x == shift), reverse=True)
         for nurse in donors:
@@ -110,30 +111,23 @@ def _try_move_shift(schedule, names, requests, manpower, shift, day, rng):
     return False
 
 
-def _local_search(schedule, names, manpower, history_shift, requests, history_streak, rng, rounds=80):
-    """小範圍搜尋：只嘗試不動 R/M/預排的 D/E 調整；保守避免破壞夜班區塊。"""
+def _local_search(schedule, names, manpower, history_shift, requests, history_streak, rng, rounds=20):
     best = deepcopy(schedule)
     best_score, best_issues = score_schedule(best, names, manpower, history_shift, requests, history_streak)
-
     for _ in range(rounds):
         trial = deepcopy(best)
         changed = False
-
-        # 優先修 D/E 缺人，N 交給 scheduler 的 N,N,off,off 區塊處理。
         days = list(range(len(manpower)))
         rng.shuffle(days)
         for day in days:
             for shift in [SHIFT_E, SHIFT_D]:
                 if _try_move_shift(trial, names, requests, manpower, shift, day, rng):
                     changed = True
-
         if not changed:
             continue
-
         s, issues = score_schedule(trial, names, manpower, history_shift, requests, history_streak)
         if s > best_score:
             best, best_score, best_issues = trial, s, issues
-
     return best, best_score, best_issues
 
 
@@ -141,12 +135,13 @@ def optimize_schedule(names, permissions, requests, manpower, history_shift, his
     best = None
     results = []
     rng = random.Random(base_seed)
+    attempts = max(1, int(attempts))
 
-    for i in range(max(1, int(attempts))):
+    for i in range(attempts):
         seed = rng.randint(1, 10_000_000)
         schedule = build_schedule_once(names, permissions, requests, manpower, history_shift, history_streak, seed=seed)
         schedule, score, issues = _local_search(
-            schedule, names, manpower, history_shift, requests, history_streak, random.Random(seed + 99), rounds=50
+            schedule, names, manpower, history_shift, requests, history_streak, random.Random(seed + 99), rounds=20
         )
         item = {"rank": None, "score": score, "issues": issues, "schedule": schedule, "seed": seed}
         results.append(item)
@@ -154,6 +149,9 @@ def optimize_schedule(names, permissions, requests, manpower, history_shift, his
             best = item
         if progress_callback:
             progress_callback(i + 1, attempts, best["score"])
+        # 若已無 error，提早結束，加快 Streamlit
+        if best and not any(x.get("severity") == "error" for x in best.get("issues", [])) and i >= min(5, attempts - 1):
+            break
 
     results.sort(key=lambda x: x["score"], reverse=True)
     for idx, item in enumerate(results, start=1):
