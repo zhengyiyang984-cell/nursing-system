@@ -211,8 +211,6 @@ class NurseScheduler:
     def _min_req(self, day, shift):
         return int(self.manpower[day].get(f"{shift}_min", 0) or 0)
 
-    def _max_req(self, day, shift):
-        return int(self.manpower[day].get(f"{shift}_max", 999) or 999)
 
     # ============================================================
     # 固定項目：R / M / 預排班
@@ -298,8 +296,6 @@ class NurseScheduler:
         for d in range(start, start + length):
             if self._shift_count(d, SHIFT_D) < self._min_req(d, SHIFT_D):
                 score += 20
-            if self._shift_count(d, SHIFT_D) < self._max_req(d, SHIFT_D):
-                score += 2
         return score + self.random.random()
 
     def _trim_parttime_to_target(self, nurse=None):
@@ -360,8 +356,6 @@ class NurseScheduler:
         for d in [start_day, start_day + 1]:
             if d < self.days:
                 score += max(0, self._min_req(d, SHIFT_N) - self._shift_count(d, SHIFT_N)) * 100
-                if self._shift_count(d, SHIFT_N) < self._max_req(d, SHIFT_N):
-                    score += 10
         score -= self._night_count(nurse) * 25
         score -= self._workload(nurse) * 2
         if self._off_count(nurse) < MIN_FULLTIME_OFF_DAYS:
@@ -399,8 +393,6 @@ class NurseScheduler:
         # 兩天 N：若該格已經是 N 可沿用；若不是 N 則不可超過 N_max。
         for d in [start_day, start_day + 1]:
             if not self._night_cell_can_be_used(nurse, d):
-                return False
-            if self.schedule[nurse][d] != SHIFT_N and self._shift_count(d, SHIFT_N) >= self._max_req(d, SHIFT_N):
                 return False
 
         # N 前一天不可是 D/E；N,N 後兩天必須能變成休假。
@@ -663,8 +655,7 @@ class NurseScheduler:
                     extended = False
                     for nd in [day + 1, day - 1]:
                         if 0 <= nd < self.days and self._can_assign(nurse, nd, cur, allow_overwrite_off=True):
-                            if self._shift_count(nd, cur) < self._max_req(nd, cur):
-                                self.schedule[nurse][nd] = cur
+                            self.schedule[nurse][nd] = cur
                                 changed = True
                                 extended = True
                                 break
