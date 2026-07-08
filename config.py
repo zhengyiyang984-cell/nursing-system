@@ -41,15 +41,15 @@ FORBIDDEN_TRANSITIONS = {
 }
 
 DEFAULT_WEEKDAY_MANPOWER = {
-    "D_min": 4, "D_max": 6,
-    "E_min": 3, "E_max": 4,
-    "N_min": 2, "N_max": 2,
+    "D_min": 4,
+    "E_min": 3,
+    "N_min": 2,
 }
 
 DEFAULT_WEEKEND_MANPOWER = {
-    "D_min": 3, "D_max": 5,
-    "E_min": 2, "E_max": 4,
-    "N_min": 2, "N_max": 2,
+    "D_min": 3,
+    "E_min": 2,
+    "N_min": 2,
 }
 
 SHIFT_COLORS = {
