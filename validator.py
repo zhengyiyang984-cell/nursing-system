@@ -125,9 +125,8 @@ def _check_manpower(schedule, names, manpower, issues):
     days = len(manpower)
     for d in range(days):
         for shift in CLINICAL_SHIFTS:
-            actual = _shift_count(schedule, names, d, shift)
-            min_req = int(manpower[d].get(f"{shift}_min", 0))
-            max_req = int(manpower[d].get(f"{shift}_max", 999))
+           actual = _shift_count(schedule, names, d, shift)
+           min_req = int(manpower[d].get(f"{shift}_min", 0))
 
             if actual < min_req:
                 issues.append(_issue(
@@ -139,16 +138,7 @@ def _check_manpower(schedule, names, manpower, issues):
                     "error",
                     "請補足人力，或調整該週人力最低需求。",
                 ))
-            if actual > max_req:
-                issues.append(_issue(
-                    "每日人力超過",
-                    "",
-                    d,
-                    shift,
-                    f"{shift} 目前 {actual} 人，高於最高限制 {max_req} 人。",
-                    "warning",
-                    "可考慮將多出人員改為 off 或其他缺人班別。",
-                ))
+
 
 
 def _check_requests(schedule, names, requests, issues):
@@ -346,10 +336,8 @@ def daily_manpower_dataframe(schedule, names, manpower, date_headers=None):
         for shift in CLINICAL_SHIFTS:
             actual = _shift_count(schedule, names, day, shift)
             min_req = int(manpower[day].get(f"{shift}_min", 0) or 0)
-            max_req = int(manpower[day].get(f"{shift}_max", 999) or 999)
             row[f"{shift}_實際"] = actual
             row[f"{shift}_Min"] = min_req
-            row[f"{shift}_Max"] = max_req
-            row[f"{shift}_狀態"] = "不足" if actual < min_req else ("超過" if actual > max_req else "OK")
+            row[f"{shift}_狀態"] = "不足" if actual < min_req else "OK"
         rows.append(row)
     return pd.DataFrame(rows)
