@@ -58,6 +58,7 @@ class NurseScheduler:
     # ============================================================
     def generate(self):
         self._apply_requests()
+        self._restore_locked_requests()
         self._assign_parttime()
         self._assign_night_blocks()
         self._repair_manpower_shortage(max_rounds=2)
@@ -89,8 +90,26 @@ class NurseScheduler:
         self._repair_long_streaks()
         self._balance_holidays()
         self._repair_manpower_shortage(max_rounds=1)
+        self._restore_locked_requests()
+        self._repair_manpower_shortage(max_rounds=1)
         self._fill_blank_with_off()
         return self.schedule
+
+    def _restore_locked_requests(self):
+        """最後保險：輸出前強制還原所有預排 D/E/N/M/R。"""
+        for nurse in self.names:
+            for day in range(self.days):
+                req = self._req(nurse, day)
+                if req == SHIFT_R:
+                    self.schedule[nurse][day] = SHIFT_R
+                    self.locked[nurse][day] = True
+                elif req == SHIFT_M:
+                    self.schedule[nurse][day] = SHIFT_M
+                    self.locked[nurse][day] = True
+                elif req in CLINICAL_SHIFTS:
+                    self.schedule[nurse][day] = req
+                    self.locked[nurse][day] = True
+
 
     def _snapshot(self):
         return tuple(tuple(self.schedule[n]) for n in self.names)
@@ -197,15 +216,21 @@ class NurseScheduler:
     def _can_assign(self, nurse, day, shift, allow_overwrite_off=False):
         if day < 0 or day >= self.days:
             return False
+
+        # 預排 D/E/N/M/R 都是固定需求，不能被後續補班或修復流程覆蓋。
+        req = self._req(nurse, day)
+        if req == SHIFT_R or req == SHIFT_M or req in CLINICAL_SHIFTS:
+            return False
+
         if self.locked[nurse][day] or self.night_locked[nurse][day]:
             return False
+
         cur = self.schedule[nurse][day]
         if cur == SHIFT_OFF and not allow_overwrite_off:
             return False
         if cur not in ["", SHIFT_OFF]:
             return False
-        if self._req(nurse, day) == SHIFT_R:
-            return False
+
         if not self._permission_ok(nurse, shift):
             return False
         if not self._request_allows(nurse, day, shift):
@@ -221,6 +246,8 @@ class NurseScheduler:
             return False
         if self.locked[nurse][day] or self.night_locked[nurse][day]:
             return False
+
+        # 預排 D/E/N/M/R 都不能被改成 off。
         if self._req(nurse, day) not in ["", SHIFT_OFF]:
             return False
         return True
@@ -241,7 +268,7 @@ class NurseScheduler:
                 elif req == SHIFT_M:
                     self.schedule[nurse][day] = SHIFT_M
                     self.locked[nurse][day] = True
-                elif req in CLINICAL_SHIFTS and self._permission_ok(nurse, req):
+                elif req in CLINICAL_SHIFTS:
                     self.schedule[nurse][day] = req
                     self.locked[nurse][day] = True
 
@@ -368,18 +395,27 @@ class NurseScheduler:
     def _night_cell_can_be_used(self, nurse, day):
         if day < 0 or day >= self.days:
             return False
-        if self._is_parttime(nurse) or not self._permission_ok(nurse, SHIFT_N):
+        if self._is_parttime(nurse):
             return False
+
+        req = self._req(nurse, day)
         cur = self.schedule[nurse][day]
+
+        # 預排 N 可以成為夜班區塊的一部分；預排其他班別不可被改成 N。
+        if req in CLINICAL_SHIFTS:
+            return req == SHIFT_N and cur == SHIFT_N
+        if req in [SHIFT_R, SHIFT_M]:
+            return False
+
+        if not self._permission_ok(nurse, SHIFT_N):
+            return False
         if cur == SHIFT_N:
             return True
         if self.locked[nurse][day] or self.night_locked[nurse][day]:
             return False
         if cur not in ["", SHIFT_OFF]:
             return False
-        if self._req(nurse, day) == SHIFT_R:
-            return False
-        return self._request_allows(nurse, day, SHIFT_N)
+        return True
 
     def _can_place_night_block(self, nurse, start):
         if start < 0 or start + 1 >= self.days:
@@ -397,9 +433,9 @@ class NurseScheduler:
                 continue
             if self.locked[nurse][day] or self.night_locked[nurse][day]:
                 return False
-            if self._req(nurse, day) not in ["", SHIFT_OFF]:
+            if self._req(nurse, day) not in ["", SHIFT_OFF, SHIFT_R]:
                 return False
-            if self.schedule[nurse][day] not in ["", SHIFT_OFF]:
+            if self.schedule[nurse][day] not in ["", SHIFT_OFF, SHIFT_R]:
                 return False
         return True
 
@@ -408,8 +444,13 @@ class NurseScheduler:
             if 0 <= day < self.days:
                 self.schedule[nurse][day] = SHIFT_N
                 self.night_locked[nurse][day] = True
+
         for day in [start + 2, start + 3]:
             if 0 <= day < self.days:
+                if self.schedule[nurse][day] == SHIFT_R or self._req(nurse, day) == SHIFT_R:
+                    self.schedule[nurse][day] = SHIFT_R
+                    self.locked[nurse][day] = True
+                    continue
                 self.schedule[nurse][day] = SHIFT_OFF
                 self.night_locked[nurse][day] = True
 
@@ -537,11 +578,16 @@ class NurseScheduler:
                             break
                         candidates = self._clinical_candidates(day, shift)
                         if candidates:
-                            self.schedule[candidates[0]][day] = shift
+                            target = candidates[0]
+                            if self.locked[target][day] or self.night_locked[target][day]:
+                                continue
+                            self.schedule[target][day] = shift
                             changed = True
                             continue
                         rescue = self._rescue_candidate(day, shift)
                         if rescue:
+                            if self.locked[rescue][day] or self.night_locked[rescue][day]:
+                                continue
                             self.schedule[rescue][day] = shift
                             changed = True
                             continue
