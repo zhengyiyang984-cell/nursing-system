@@ -193,7 +193,7 @@ config_df = st.data_editor(
     },
 )
 
-st.subheader("📊 2. 每週人力上下限")
+st.subheader("📊 2. 每週最低人力")
 
 weeks_map = {}
 
@@ -244,15 +244,9 @@ for i in range(num_days):
                 "週別與平假日": key,
                 "week_id": week_label,
                 "is_we": True,
-
-                "D_min": 3,
-                "D_max": 5,
-
-                "E_min": 2,
-                "E_max": 4,
-
-                "N_min": 2,
-                "N_max": 2
+                "D_min": 4,
+                "E_min": 3,
+                "N_min": 2
             })
 
         else:
@@ -261,15 +255,9 @@ for i in range(num_days):
                 "週別與平假日": key,
                 "week_id": week_label,
                 "is_we": False,
-
                 "D_min": 4,
-                "D_max": 6,
-
                 "E_min": 3,
-                "E_max": 4,
-
-                "N_min": 2,
-                "N_max": 2
+                "N_min": 2
             })
 
 weekly_df = st.data_editor(
@@ -307,16 +295,9 @@ for d in range(num_days):
     ].iloc[0]
 
     manpower.append({
-
         "D_min": int(selected["D_min"]),
-        "D_max": int(selected["D_max"]),
-
         "E_min": int(selected["E_min"]),
-        "E_max": int(selected["E_max"]),
-
-        "N_min": int(selected["N_min"]),
-        "N_max": int(selected["N_max"])
-
+        "N_min": int(selected["N_min"])
     })
 
 st.divider()
