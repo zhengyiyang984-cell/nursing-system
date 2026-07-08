@@ -505,13 +505,11 @@ class NurseScheduler:
     # ============================================================
     def _repair_manpower_shortage(self):
         """重寫：人力達標優先；N 只能用 N,N,off,off，D/E 可用 off 人員補。"""
-        for _ in range(10):
-            changed = False
-            for day in range(self.days):
+      guard = 0
+
                 while self._shift_count(day, SHIFT_N) < self._min_req(day, SHIFT_N):
-                    if self._place_best_night_block_covering(day):
-                        changed = True
-                    else:
+                    guard += 1
+                    if guard > len(self.names):
                         break
                 for shift in [SHIFT_E, SHIFT_D]:
                     while self._shift_count(day, shift) < self._min_req(day, shift):
