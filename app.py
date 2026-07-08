@@ -244,8 +244,8 @@ for i in range(num_days):
                 "週別與平假日": key,
                 "week_id": week_label,
                 "is_we": True,
-                "D_min": 4,
-                "E_min": 3,
+                "D_min": 3,
+                "E_min": 2,
                 "N_min": 2
             })
 
