@@ -215,3 +215,65 @@ def daily_manpower_dataframe(schedule, names, manpower, date_headers=None):
             row[f"{shift}_狀態"] = "不足" if actual < min_req else "OK"
         rows.append(row)
     return pd.DataFrame(rows)
+
+def optimize_schedule(
+    names,
+    permissions,
+    requests,
+    manpower,
+    history_shift,
+    history_streak,
+    attempts=100,
+    base_seed=None,
+    progress_callback=None
+):
+    import random
+
+    best = None
+    top = []
+    rng = random.Random(base_seed)
+
+    for i in range(max(1, int(attempts))):
+        seed = rng.randint(1, 10_000_000)
+
+        schedule = build_schedule_once(
+            names,
+            permissions,
+            requests,
+            manpower,
+            history_shift,
+            history_streak,
+            seed=seed
+        )
+
+        score, issues = score_schedule(
+            schedule,
+            names,
+            manpower,
+            history_shift,
+            requests,
+            history_streak
+        )
+
+        item = {
+            "rank": None,
+            "score": score,
+            "issues": issues,
+            "schedule": schedule,
+            "seed": seed
+        }
+
+        top.append(item)
+
+        if best is None or score > best["score"]:
+            best = item
+
+        if progress_callback:
+            progress_callback(i + 1, attempts, best["score"])
+
+    top.sort(key=lambda x: x["score"], reverse=True)
+
+    for idx, item in enumerate(top, start=1):
+        item["rank"] = idx
+
+    return best, top[:10]
