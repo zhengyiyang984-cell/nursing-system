@@ -105,6 +105,9 @@ class NurseScheduler:
             self._repair_parttime_limit()
             self._fill_blank_with_off()
 
+        self._v22_final_solver(rounds=12)
+        self._fill_blank_with_off()
+        self._restore_locked_requests()
         return self.schedule
 
     def _snapshot(self):
@@ -990,6 +993,227 @@ class NurseScheduler:
 
             if not changed:
                 break
+
+
+    # ============================================================
+    # V22 Ultimate Final Solver
+    # ============================================================
+    def _error_count_estimate(self):
+        """不用依賴 validator.py 的輕量錯誤估算，供內部迴圈判斷是否改善。"""
+        errors = 0
+
+        # 每日人力
+        for day in range(self.days):
+            for shift in CLINICAL_SHIFTS:
+                if self._shift_count(day, shift) < self._min_req(day, shift):
+                    errors += self._min_req(day, shift) - self._shift_count(day, shift)
+
+        # 單顆 N / N 後未休
+        for nurse in self.names:
+            if self._is_parttime(nurse):
+                continue
+            row = self.schedule[nurse]
+            d = 0
+            while d < self.days:
+                if row[d] != SHIFT_N:
+                    d += 1
+                    continue
+                if d + 1 >= self.days or row[d + 1] != SHIFT_N:
+                    errors += 1
+                    d += 1
+                    continue
+                for rd in [d + 2, d + 3]:
+                    if rd < self.days and row[rd] not in REST_SHIFTS:
+                        errors += 1
+                d += 2
+
+        # 全職休假與連班
+        for nurse in self.names:
+            if self._is_parttime(nurse):
+                if self._shift_workload(nurse, PARTTIME_ALLOWED_SHIFT) != PARTTIME_DAYS:
+                    errors += 1
+                continue
+            if sum(1 for x in self.schedule[nurse] if x in REST_SHIFTS) < MIN_FULLTIME_OFF_DAYS:
+                errors += 1
+            streak = self._find_longest_streak(nurse)
+            if streak and streak[2] > MAX_CONTINUOUS_WORK:
+                errors += streak[2] - MAX_CONTINUOUS_WORK
+
+        return errors
+
+    def _v22_final_solver(self, rounds=12):
+        """最後強制修復迴圈：人力、夜班、連班、休假固定順序反覆處理。"""
+        best_snapshot = None
+        best_errors = None
+
+        for _ in range(rounds):
+            before = self._snapshot()
+
+            self._restore_locked_requests()
+            self._repair_parttime_limit()
+            self._v22_repair_all_single_nights()
+            self._repair_night_blocks()
+
+            # 人力優先補足
+            self._v22_force_all_manpower()
+
+            # 修連班與休假後，立即再補人力
+            self._v22_force_break_long_streaks()
+            self._v22_force_all_manpower()
+
+            self._balance_holidays()
+            self._v22_force_all_manpower()
+
+            self._repair_e_to_d_transitions()
+            self._repair_parttime_limit()
+            self._fill_blank_with_off()
+            self._restore_locked_requests()
+
+            current_errors = self._error_count_estimate()
+            if best_errors is None or current_errors < best_errors:
+                best_errors = current_errors
+                best_snapshot = self._snapshot()
+
+            if current_errors == 0:
+                break
+
+            if before == self._snapshot():
+                break
+
+        return best_snapshot, best_errors
+
+    def _v22_force_all_manpower(self):
+        """掃描整月，D/E/N 不足就盡力補滿。"""
+        for _ in range(4):
+            changed = False
+            for day in range(self.days):
+                # N 先用夜班區塊，D/E 用單日補足
+                for shift in [SHIFT_N, SHIFT_E, SHIFT_D]:
+                    guard = 0
+                    while self._shift_count(day, shift) < self._min_req(day, shift):
+                        guard += 1
+                        if guard > len(self.names) * 4:
+                            break
+
+                        if shift == SHIFT_N and self._place_best_night_block_covering(day):
+                            changed = True
+                            continue
+
+                        if self._force_fill_shift(day, shift):
+                            changed = True
+                            continue
+
+                        # 最後手段：D 不足時，找任何可用 off 全職補 D，放寬 transition 但仍不碰預排。
+                        if shift == SHIFT_D and self._v22_emergency_fill_day(day, shift):
+                            changed = True
+                            continue
+
+                        break
+            if not changed:
+                break
+
+    def _v22_emergency_fill_day(self, day, shift):
+        """最低人力最後手段：仍不動預排，不動夜班鎖。"""
+        options = []
+        for nurse in self.names:
+            if self._is_parttime(nurse):
+                continue
+            if self.locked[nurse][day] or self.night_locked[nurse][day]:
+                continue
+            if self._fixed_request(nurse, day):
+                continue
+            if self.schedule[nurse][day] not in ["", SHIFT_OFF]:
+                continue
+            if not self._permission_ok(nurse, shift):
+                continue
+            # 避免 N 後硬接 D/E，這種安全規則仍保留
+            if self._prev(nurse, day) == SHIFT_N and shift not in [SHIFT_N, SHIFT_OFF, SHIFT_R]:
+                continue
+            options.append((self._workload(nurse), self._shift_workload(nurse, shift), self.random.random(), nurse))
+
+        if not options:
+            return False
+
+        options.sort()
+        nurse = options[0][-1]
+        self.schedule[nurse][day] = shift
+        return True
+
+    def _v22_repair_all_single_nights(self):
+        """強制處理所有單顆 N，盡量轉成 N,N,off,off。"""
+        for _ in range(4):
+            changed = False
+            for nurse in self.names:
+                if self._is_parttime(nurse):
+                    continue
+                for day in range(self.days):
+                    if self.schedule[nurse][day] != SHIFT_N:
+                        continue
+
+                    left_n = day > 0 and self.schedule[nurse][day - 1] == SHIFT_N
+                    right_n = day + 1 < self.days and self.schedule[nurse][day + 1] == SHIFT_N
+                    if left_n or right_n:
+                        continue
+
+                    if self._force_night_block_for_nurse(nurse, day):
+                        changed = True
+                        continue
+                    if self._force_night_block_for_nurse(nurse, day - 1):
+                        changed = True
+                        continue
+
+                    # 若這顆 N 不是預排且當天 N 有多餘，移除它
+                    if not self.locked[nurse][day] and self._day_has_surplus(day, SHIFT_N):
+                        self.schedule[nurse][day] = SHIFT_OFF
+                        self.night_locked[nurse][day] = False
+                        changed = True
+            if not changed:
+                break
+
+    def _v22_force_break_long_streaks(self):
+        """強制切斷超過 MAX_CONTINUOUS_WORK 的連班，並同步補人力。"""
+        for nurse in self.names:
+            if not self._is_fulltime(nurse):
+                continue
+
+            for _ in range(16):
+                streak = self._find_longest_streak(nurse)
+                if not streak or streak[2] <= MAX_CONTINUOUS_WORK:
+                    break
+
+                start, end, _length = streak
+                days = list(range(start, end + 1))
+                days.sort(key=lambda d: abs(d - (start + end) / 2))
+
+                fixed = False
+                for day in days:
+                    shift = self.schedule[nurse][day]
+                    if shift not in [SHIFT_D, SHIFT_E]:
+                        continue
+                    if not self._can_set_off(nurse, day):
+                        continue
+
+                    if self._day_has_surplus(day, shift):
+                        self.schedule[nurse][day] = SHIFT_OFF
+                        fixed = True
+                        break
+
+                    # 找 helper 接班，原人休息
+                    helper = self._find_helper_for_day_shift(day, shift, avoid=nurse)
+                    if helper:
+                        self.schedule[helper][day] = shift
+                        self.schedule[nurse][day] = SHIFT_OFF
+                        fixed = True
+                        break
+
+                    # 仍找不到就先切休，後續人力修復再補
+                    self.schedule[nurse][day] = SHIFT_OFF
+                    fixed = True
+                    break
+
+                if not fixed:
+                    break
+
 
 
 def build_schedule_once(names, permissions, requests, manpower, history_shift, history_streak, seed=None):
