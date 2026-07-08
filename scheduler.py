@@ -85,7 +85,10 @@ class NurseScheduler:
         self._fill_blank_with_off()
 
         # 最後收尾：專門修 E→D 與一日碎班，不改 app.py 的介面。
-        self._final_repair(max_rounds=3)
+        self._final_repair(max_rounds=6)
+        self._repair_long_streaks()
+        self._balance_holidays()
+        self._repair_manpower_shortage(max_rounds=1)
         self._fill_blank_with_off()
         return self.schedule
 
@@ -547,28 +550,55 @@ class NurseScheduler:
                 break
 
     def _repair_long_streaks(self):
+        """修正最長連班超過上限。
+
+        優先在連班中段把 D/E 改 off；若該日人力剛好等於最低需求，
+        會先找 off 的同仁接班，再讓原護理師休假。
+        不動預排、R/M、夜班區塊與半職。
+        """
         for nurse in self.names:
             if not self._is_fulltime(nurse):
                 continue
-            for _ in range(8):
+
+            for _ in range(12):
                 streak = self._find_longest_streak(nurse)
                 if not streak or streak[2] <= MAX_CONTINUOUS_WORK:
                     break
+
                 start, end, _length = streak
                 days = list(range(start, end + 1))
                 days.sort(key=lambda d: abs(d - (start + end) / 2))
+
                 fixed = False
+
                 for day in days:
                     shift = self.schedule[nurse][day]
                     if shift not in [SHIFT_D, SHIFT_E]:
                         continue
-                    if self._can_set_off(nurse, day) and self._day_has_surplus(day, shift):
+                    if not self._can_set_off(nurse, day):
+                        continue
+
+                    if self._day_has_surplus(day, shift):
                         self.schedule[nurse][day] = SHIFT_OFF
                         fixed = True
                         break
-                    if self._swap_to_make_off(nurse, day, shift):
+
+                    helper = self._find_helper_for_shift(nurse, day, shift)
+                    if helper is not None:
+                        self.schedule[helper][day] = shift
+                        self.schedule[nurse][day] = SHIFT_OFF
                         fixed = True
                         break
+
+                if not fixed:
+                    for day in days:
+                        shift = self.schedule[nurse][day]
+                        if shift not in [SHIFT_D, SHIFT_E]:
+                            continue
+                        if self._swap_to_make_off(nurse, day, shift):
+                            fixed = True
+                            break
+
                 if not fixed:
                     break
 
@@ -745,8 +775,10 @@ class NurseScheduler:
 
             self._repair_e_to_d_transitions()
             self._remove_single_day_fragments()
+            self._repair_long_streaks()
             self._repair_manpower_shortage(max_rounds=1)
             self._balance_holidays()
+            self._repair_long_streaks()
             self._repair_manpower_shortage(max_rounds=1)
             self._repair_e_to_d_transitions()
             self._fill_blank_with_off()
