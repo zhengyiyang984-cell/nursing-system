@@ -91,12 +91,12 @@ class NurseScheduler:
         self._balance_holidays()
         self._repair_manpower_shortage(max_rounds=1)
         self._restore_locked_requests()
-        self._repair_manpower_shortage(max_rounds=1)
+        self._hospital_force_manpower()
         self._fill_blank_with_off()
         return self.schedule
 
     def _restore_locked_requests(self):
-        """最後保險：輸出前強制還原所有預排 D/E/N/M/R。"""
+        """最後保險：還原所有預排 D/E/N/M/R。"""
         for nurse in self.names:
             for day in range(self.days):
                 req = self._req(nurse, day)
@@ -217,7 +217,7 @@ class NurseScheduler:
         if day < 0 or day >= self.days:
             return False
 
-        # 預排 D/E/N/M/R 都是固定需求，不能被後續補班或修復流程覆蓋。
+        # 預排 D/E/N/M/R 是人工指定，不能被後續流程覆蓋。
         req = self._req(nurse, day)
         if req == SHIFT_R or req == SHIFT_M or req in CLINICAL_SHIFTS:
             return False
@@ -233,8 +233,6 @@ class NurseScheduler:
 
         if not self._permission_ok(nurse, shift):
             return False
-        if not self._request_allows(nurse, day, shift):
-            return False
         if not self._transition_ok(nurse, day, shift):
             return False
         if not self._max_streak_ok(nurse, day, shift):
@@ -246,8 +244,6 @@ class NurseScheduler:
             return False
         if self.locked[nurse][day] or self.night_locked[nurse][day]:
             return False
-
-        # 預排 D/E/N/M/R 都不能被改成 off。
         if self._req(nurse, day) not in ["", SHIFT_OFF]:
             return False
         return True
@@ -395,27 +391,18 @@ class NurseScheduler:
     def _night_cell_can_be_used(self, nurse, day):
         if day < 0 or day >= self.days:
             return False
-        if self._is_parttime(nurse):
+        if self._is_parttime(nurse) or not self._permission_ok(nurse, SHIFT_N):
             return False
-
-        req = self._req(nurse, day)
         cur = self.schedule[nurse][day]
-
-        # 預排 N 可以成為夜班區塊的一部分；預排其他班別不可被改成 N。
-        if req in CLINICAL_SHIFTS:
-            return req == SHIFT_N and cur == SHIFT_N
-        if req in [SHIFT_R, SHIFT_M]:
-            return False
-
-        if not self._permission_ok(nurse, SHIFT_N):
-            return False
         if cur == SHIFT_N:
             return True
         if self.locked[nurse][day] or self.night_locked[nurse][day]:
             return False
         if cur not in ["", SHIFT_OFF]:
             return False
-        return True
+        if self._req(nurse, day) == SHIFT_R:
+            return False
+        return self._request_allows(nurse, day, SHIFT_N)
 
     def _can_place_night_block(self, nurse, start):
         if start < 0 or start + 1 >= self.days:
@@ -433,9 +420,9 @@ class NurseScheduler:
                 continue
             if self.locked[nurse][day] or self.night_locked[nurse][day]:
                 return False
-            if self._req(nurse, day) not in ["", SHIFT_OFF, SHIFT_R]:
+            if self._req(nurse, day) not in ["", SHIFT_OFF]:
                 return False
-            if self.schedule[nurse][day] not in ["", SHIFT_OFF, SHIFT_R]:
+            if self.schedule[nurse][day] not in ["", SHIFT_OFF]:
                 return False
         return True
 
@@ -578,22 +565,88 @@ class NurseScheduler:
                             break
                         candidates = self._clinical_candidates(day, shift)
                         if candidates:
-                            target = candidates[0]
-                            if self.locked[target][day] or self.night_locked[target][day]:
-                                continue
-                            self.schedule[target][day] = shift
+                            self.schedule[candidates[0]][day] = shift
                             changed = True
                             continue
                         rescue = self._rescue_candidate(day, shift)
                         if rescue:
-                            if self.locked[rescue][day] or self.night_locked[rescue][day]:
-                                continue
                             self.schedule[rescue][day] = shift
                             changed = True
                             continue
                         break
             if not changed:
                 break
+
+
+    def _hospital_force_manpower(self, max_rounds=4):
+        """醫院模式：最低人力優先，最後一定盡量補滿 D/E/N。"""
+        for _ in range(max_rounds):
+            changed = False
+            self._restore_locked_requests()
+
+            for day in range(self.days):
+                for shift in [SHIFT_N, SHIFT_E, SHIFT_D]:
+                    guard = 0
+                    while self._shift_count(day, shift) < self._min_req(day, shift):
+                        guard += 1
+                        if guard > len(self.names) * 3:
+                            break
+                        if shift == SHIFT_N and self._place_best_night_block_covering(day):
+                            changed = True
+                            continue
+                        if self._force_fill_shift(day, shift):
+                            changed = True
+                            continue
+                        break
+
+            if not changed:
+                break
+
+    def _force_fill_shift(self, day, shift):
+        """最後手段補足單日最低人力。
+
+        只從空白/off 且非預排、非夜班鎖定者補人；不覆蓋 D/E/N/M/R 預排。
+        權限仍會檢查。若規則太緊，會放寬連班限制，但不放寬預排鎖定。
+        """
+        candidates = []
+
+        for nurse in self.names:
+            if self._is_parttime(nurse) and shift != PARTTIME_ALLOWED_SHIFT:
+                continue
+            if self.locked[nurse][day] or self.night_locked[nurse][day]:
+                continue
+            if self._req(nurse, day) not in ["", SHIFT_OFF]:
+                continue
+            if self.schedule[nurse][day] not in ["", SHIFT_OFF]:
+                continue
+            if not self._permission_ok(nurse, shift):
+                continue
+            if not self._transition_ok(nurse, day, shift):
+                continue
+
+            # 第一順位：正常連班限制內。
+            if self._max_streak_ok(nurse, day, shift):
+                priority = 0
+            else:
+                # 第二順位：為了補足最低人力，允許暫時超過連班，之後再修。
+                priority = 1
+
+            candidates.append((
+                priority,
+                self._workload(nurse),
+                self._shift_workload(nurse, shift),
+                self.random.random(),
+                nurse,
+            ))
+
+        if not candidates:
+            return False
+
+        candidates.sort()
+        nurse = candidates[0][-1]
+        self.schedule[nurse][day] = shift
+        return True
+
 
     def _repair_long_streaks(self):
         """修正最長連班超過上限。
@@ -749,6 +802,8 @@ class NurseScheduler:
                 continue
             if self.schedule[helper][day] != SHIFT_OFF:
                 continue
+            if self.locked[helper][day] or self.night_locked[helper][day]:
+                continue
             if self._can_assign(helper, day, shift, allow_overwrite_off=True):
                 helpers.append(helper)
         if not helpers:
@@ -874,6 +929,8 @@ class NurseScheduler:
             if helper == avoid_nurse or self._is_parttime(helper):
                 continue
             if self.schedule[helper][day] != SHIFT_OFF:
+                continue
+            if self.locked[helper][day] or self.night_locked[helper][day]:
                 continue
             if self._can_assign(helper, day, shift, allow_overwrite_off=True):
                 helpers.append(helper)
