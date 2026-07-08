@@ -123,10 +123,11 @@ def _check_night_pattern(schedule, names, requests, issues):
 
 def _check_manpower(schedule, names, manpower, issues):
     days = len(manpower)
+
     for d in range(days):
         for shift in CLINICAL_SHIFTS:
-           actual = _shift_count(schedule, names, d, shift)
-           min_req = int(manpower[d].get(f"{shift}_min", 0))
+            actual = _shift_count(schedule, names, d, shift)
+            min_req = int(manpower[d].get(f"{shift}_min", 0))
 
             if actual < min_req:
                 issues.append(_issue(
@@ -138,7 +139,6 @@ def _check_manpower(schedule, names, manpower, issues):
                     "error",
                     "請補足人力，或調整該週人力最低需求。",
                 ))
-
 
 
 def _check_requests(schedule, names, requests, issues):
