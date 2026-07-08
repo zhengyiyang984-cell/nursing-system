@@ -30,34 +30,40 @@ def _is_fixed_request(requests, nurse, day):
 
 
 def score_schedule(schedule, names, manpower, history_shift, requests, history_streak=None):
+    """分數越高越好。Error 權重大於公平性，避免選到仍有硬性錯誤的班表。"""
     issues = validate_schedule(schedule, names, manpower, history_shift, requests, history_streak)
     score = 1_000_000.0
 
-    # 人力不足是最高優先
     for day in range(len(manpower)):
         for shift in CLINICAL_SHIFTS:
             actual = _shift_count(schedule, names, day, shift)
             min_req = int(manpower[day].get(f"{shift}_min", 0) or 0)
             if actual < min_req:
-                score -= (min_req - actual) * 30000
+                score -= (min_req - actual) * 60000
 
-    # 規則違規扣分
     for issue in issues:
         category = str(issue.get("category", ""))
         message = str(issue.get("message", ""))
         severity = issue.get("severity", "warning")
+
         if "每日人力" in category or "低於最低" in message:
-            score -= 30000
+            score -= 60000
+        elif "連續上班" in category:
+            score -= 50000
+        elif "全職休假不足" in category or "休假不足" in category:
+            score -= 45000
         elif "大夜" in category or "N→N→off→off" in message:
-            score -= 15000
-        elif "休假不足" in category or "連續上班" in category:
-            score -= 12000
+            score -= 40000
+        elif "班別銜接" in category or "E 後不能接 D" in message:
+            score -= 35000
         elif severity == "error":
-            score -= 9000
+            score -= 30000
         elif "碎班" in category:
-            score -= 700
+            score -= 8000
+        elif "每週休假" in category:
+            score -= 6000
         else:
-            score -= 400
+            score -= 1000
 
     full_time = _full_time(names)
     if full_time:
@@ -65,10 +71,11 @@ def score_schedule(schedule, names, manpower, history_shift, requests, history_s
         day_counts = [sum(1 for x in schedule[n] if x == SHIFT_D) for n in full_time]
         work_counts = [sum(1 for x in schedule[n] if x in WORK_SHIFTS) for n in full_time]
         off_counts = [sum(1 for x in schedule[n] if x in REST_SHIFTS) for n in full_time]
-        score -= safe_stdev(night_counts) * 1600
-        score -= safe_stdev(day_counts) * 900
-        score -= safe_stdev(work_counts) * 700
-        score -= safe_stdev(off_counts) * 500
+
+        score -= safe_stdev(night_counts) * 1200
+        score -= safe_stdev(day_counts) * 600
+        score -= safe_stdev(work_counts) * 500
+        score -= safe_stdev(off_counts) * 300
 
     return round(score, 2), issues
 
@@ -81,14 +88,17 @@ def _try_move_shift(schedule, names, requests, manpower, shift, day, rng):
     donor_days = list(range(len(manpower)))
     rng.shuffle(donor_days)
     donor_days.sort(
-        key=lambda d: _shift_count(schedule, names, d, shift) - int(manpower[d].get(f"{shift}_min", 0) or 0),
+        key=lambda d: _shift_count(schedule, names, d, shift)
+        - int(manpower[d].get(f"{shift}_min", 0) or 0),
         reverse=True,
     )
+
     for from_day in donor_days:
         if from_day == day:
             continue
         if _shift_count(schedule, names, from_day, shift) <= int(manpower[from_day].get(f"{shift}_min", 0) or 0):
             continue
+
         donors = [
             n for n in names
             if n not in PART_TIME
@@ -97,41 +107,57 @@ def _try_move_shift(schedule, names, requests, manpower, shift, day, rng):
         ]
         rng.shuffle(donors)
         donors.sort(key=lambda n: sum(1 for x in schedule[n] if x == shift), reverse=True)
+
         for nurse in donors:
             if _is_fixed_request(requests, nurse, day):
                 continue
             if schedule[nurse][day] not in REST_SHIFTS:
                 continue
-            trial = deepcopy(schedule)
-            trial[nurse][from_day] = SHIFT_OFF
-            trial[nurse][day] = shift
+
             schedule[nurse][from_day] = SHIFT_OFF
             schedule[nurse][day] = shift
             return True
+
     return False
 
 
 def _local_search(schedule, names, manpower, history_shift, requests, history_streak, rng, rounds=20):
     best = deepcopy(schedule)
     best_score, best_issues = score_schedule(best, names, manpower, history_shift, requests, history_streak)
+
     for _ in range(rounds):
         trial = deepcopy(best)
         changed = False
+
         days = list(range(len(manpower)))
         rng.shuffle(days)
+
         for day in days:
             for shift in [SHIFT_E, SHIFT_D]:
                 if _try_move_shift(trial, names, requests, manpower, shift, day, rng):
                     changed = True
+
         if not changed:
             continue
+
         s, issues = score_schedule(trial, names, manpower, history_shift, requests, history_streak)
         if s > best_score:
             best, best_score, best_issues = trial, s, issues
+
     return best, best_score, best_issues
 
 
-def optimize_schedule(names, permissions, requests, manpower, history_shift, history_streak, attempts=100, base_seed=None, progress_callback=None):
+def optimize_schedule(
+    names,
+    permissions,
+    requests,
+    manpower,
+    history_shift,
+    history_streak,
+    attempts=100,
+    base_seed=None,
+    progress_callback=None,
+):
     best = None
     results = []
     rng = random.Random(base_seed)
@@ -139,21 +165,52 @@ def optimize_schedule(names, permissions, requests, manpower, history_shift, his
 
     for i in range(attempts):
         seed = rng.randint(1, 10_000_000)
-        schedule = build_schedule_once(names, permissions, requests, manpower, history_shift, history_streak, seed=seed)
-        schedule, score, issues = _local_search(
-            schedule, names, manpower, history_shift, requests, history_streak, random.Random(seed + 99), rounds=20
+
+        schedule = build_schedule_once(
+            names,
+            permissions,
+            requests,
+            manpower,
+            history_shift,
+            history_streak,
+            seed=seed,
         )
-        item = {"rank": None, "score": score, "issues": issues, "schedule": schedule, "seed": seed}
+
+        schedule, score, issues = _local_search(
+            schedule,
+            names,
+            manpower,
+            history_shift,
+            requests,
+            history_streak,
+            random.Random(seed + 99),
+            rounds=20,
+        )
+
+        item = {
+            "rank": None,
+            "score": score,
+            "issues": issues,
+            "schedule": schedule,
+            "seed": seed,
+        }
         results.append(item)
+
         if best is None or score > best["score"]:
             best = item
+
         if progress_callback:
             progress_callback(i + 1, attempts, best["score"])
-        # 若已無 error，提早結束，加快 Streamlit
-        if best and not any(x.get("severity") == "error" for x in best.get("issues", [])) and i >= min(5, attempts - 1):
+
+        if (
+            best
+            and not any(x.get("severity") == "error" for x in best.get("issues", []))
+            and i >= min(8, attempts - 1)
+        ):
             break
 
     results.sort(key=lambda x: x["score"], reverse=True)
     for idx, item in enumerate(results, start=1):
         item["rank"] = idx
+
     return best, results[:10]
