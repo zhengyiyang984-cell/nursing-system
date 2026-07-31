@@ -208,7 +208,7 @@ def _check_holidays_and_streaks(schedule, names, history_streak, issues):
 
         if nurse in PART_TIME:
             d_count = sum(1 for x in row if x == PARTTIME_ALLOWED_SHIFT)
-            invalid = sum(1 for x in row if x not in [PARTTIME_ALLOWED_SHIFT, SHIFT_OFF, SHIFT_R, ""])
+            invalid = sum(1 for x in row if x not in [PARTTIME_ALLOWED_SHIFT, SHIFT_M, SHIFT_OFF, SHIFT_R, ""])
             if d_count != PARTTIME_DAYS:
                 issues.append(_issue(
                     "兼職天數",
@@ -225,7 +225,7 @@ def _check_holidays_and_streaks(schedule, names, history_streak, issues):
                     nurse,
                     None,
                     "",
-                    "兼職只能排 D/off/R，不能排 E/N/M。",
+                    "兼職只能排 D/M/off/R，不能排 E/N。",
                     "error",
                     "請將兼職非 D 班別改為 off 或移給全職。",
                 ))

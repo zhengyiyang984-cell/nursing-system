@@ -147,6 +147,22 @@ def _local_search(schedule, names, manpower, history_shift, requests, history_st
     return best, best_score, best_issues
 
 
+
+def quality_key(item):
+    """字典序品質：硬性錯誤永遠優先於公平性分數。"""
+    issues = item.get("issues", [])
+    errors = [x for x in issues if x.get("severity") == "error"]
+    warnings = [x for x in issues if x.get("severity") != "error"]
+
+    manpower = sum(1 for x in errors if "每日人力" in str(x.get("category", "")))
+    requests = sum(1 for x in errors if "預排" in str(x.get("category", "")))
+    nights = sum(1 for x in errors if "大夜" in str(x.get("category", "")))
+    streaks = sum(1 for x in errors if "連續上班" in str(x.get("category", "")))
+    holidays = sum(1 for x in errors if "休假不足" in str(x.get("category", "")))
+
+    # 越小越好；score 取負值讓較高分排前面。
+    return (len(errors), manpower, requests, nights, streaks, holidays, len(warnings), -float(item.get("score", 0)))
+
 def optimize_schedule(
     names,
     permissions,
@@ -196,7 +212,7 @@ def optimize_schedule(
         }
         results.append(item)
 
-        if best is None or score > best["score"]:
+        if best is None or quality_key(item) < quality_key(best):
             best = item
 
         if progress_callback:
@@ -209,7 +225,7 @@ def optimize_schedule(
         ):
             break
 
-    results.sort(key=lambda x: x["score"], reverse=True)
+    results.sort(key=quality_key)
     for idx, item in enumerate(results, start=1):
         item["rank"] = idx
 

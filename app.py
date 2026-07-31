@@ -3,11 +3,13 @@ import pandas as pd
 import streamlit as st
 
 from config import *
-from loader import load_request_and_permissions
+from loader import load_request_and_permissions, load_history_and_permission as load_history_and_permission_v24
 from utils import make_date_headers, default_manpower_by_dates
 from optimizer import optimize_schedule
 from schedule_statistics import build_schedule_dataframe, build_manpower_dataframe, build_person_statistics
 from validator import validate_schedule, issues_to_dataframe
+from input_validator import validate_inputs
+from feasibility import check_feasibility
 from exporter import export_workbook
 
 # =====================================================
@@ -157,7 +159,7 @@ if not file_request:
 
 try:
     requests, request_permissions = load_request_and_permissions(file_request, CORE_STAFF, num_days)
-    history_shift, history_streak, auto_permissions = load_history_and_permission(file_history, CORE_STAFF)
+    history_shift, history_streak, auto_permissions = load_history_and_permission_v24(file_history, CORE_STAFF)
 except Exception as exc:
     st.error(f"Excel 讀取失敗：{exc}")
     st.stop()
@@ -165,9 +167,12 @@ except Exception as exc:
 # 權限來源：優先使用上月2F班表推估，若沒抓到再用預排休表，最後預設 DEN
 initial_permissions = {}
 for nurse in CORE_STAFF:
-    auto_perm = auto_permissions.get(nurse, "DEN")
-    req_perm = request_permissions.get(nurse, "DEN")
-    initial_permissions[nurse] = auto_perm if auto_perm != "DEN" else req_perm
+    # 合併上月權限、預班表權限與本月固定班別，避免單一來源漏掉可排班別。
+    observed = set(str(auto_permissions.get(nurse, ""))) | set(str(request_permissions.get(nurse, "")))
+    observed |= {x for x in requests.get(nurse, []) if x in CLINICAL_SHIFTS}
+    observed &= set(CLINICAL_SHIFTS)
+    merged = "".join(s for s in CLINICAL_SHIFTS if s in observed)
+    initial_permissions[nurse] = PARTTIME_ALLOWED_SHIFT if nurse in PART_TIME else (merged or "DEN")
 
 st.subheader("👥 1. 人員權限與上月狀態")
 st.caption("權限、上月最後班、已連上天數會自動從上月2F班表擷取；仍可在下方手動修正。")
@@ -304,6 +309,17 @@ st.divider()
 run = st.button("🚀 啟動 AI 最佳化排班", type="primary", use_container_width=True)
 
 if run:
+    preflight_issues = validate_inputs(
+        CORE_STAFF, permissions, requests, manpower, history_shift_final, history_streak_final
+    )
+    feasibility_issues = check_feasibility(CORE_STAFF, permissions, requests, manpower)
+    blocking = [x for x in preflight_issues + feasibility_issues if x.get("severity") == "error"]
+
+    if blocking:
+        st.error("排班前檢查未通過，請先修正下列問題。")
+        st.dataframe(issues_to_dataframe(blocking, date_headers), use_container_width=True)
+        st.stop()
+
     progress = st.progress(0)
     status = st.empty()
 
@@ -324,7 +340,10 @@ if run:
     )
     st.session_state.best_result = best
     st.session_state.top_results = top
-    st.success(f"排班完成，最佳分數：{best['score']}")
+    if any(x.get("severity") == "error" for x in best.get("issues", [])):
+        st.warning(f"已找到目前最佳結果，但仍有硬性錯誤；系統不會將它標示為完全成功。分數：{best['score']}")
+    else:
+        st.success(f"排班完成，所有硬性規則已通過。最佳分數：{best['score']}")
 
 if st.session_state.best_result:
     best = st.session_state.best_result
@@ -335,7 +354,8 @@ if st.session_state.best_result:
         CORE_STAFF,
         manpower,
         history_shift_final,
-        requests
+        requests,
+        history_streak_final
     )
     issues_df = issues_to_dataframe(issues, date_headers)
 
