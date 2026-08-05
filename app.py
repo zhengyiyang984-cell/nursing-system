@@ -3,13 +3,11 @@ import pandas as pd
 import streamlit as st
 
 from config import *
-from loader import load_request_and_permissions, load_history_and_permission as load_history_and_permission_v24
+from loader import load_request_and_permissions
 from utils import make_date_headers, default_manpower_by_dates
 from optimizer import optimize_schedule
 from schedule_statistics import build_schedule_dataframe, build_manpower_dataframe, build_person_statistics
 from validator import validate_schedule, issues_to_dataframe
-from input_validator import validate_inputs
-from feasibility import check_feasibility
 from exporter import export_workbook
 
 # =====================================================
@@ -159,7 +157,7 @@ if not file_request:
 
 try:
     requests, request_permissions = load_request_and_permissions(file_request, CORE_STAFF, num_days)
-    history_shift, history_streak, auto_permissions = load_history_and_permission_v24(file_history, CORE_STAFF)
+    history_shift, history_streak, auto_permissions = load_history_and_permission(file_history, CORE_STAFF)
 except Exception as exc:
     st.error(f"Excel 讀取失敗：{exc}")
     st.stop()
@@ -167,12 +165,9 @@ except Exception as exc:
 # 權限來源：優先使用上月2F班表推估，若沒抓到再用預排休表，最後預設 DEN
 initial_permissions = {}
 for nurse in CORE_STAFF:
-    # 合併上月權限、預班表權限與本月固定班別，避免單一來源漏掉可排班別。
-    observed = set(str(auto_permissions.get(nurse, ""))) | set(str(request_permissions.get(nurse, "")))
-    observed |= {x for x in requests.get(nurse, []) if x in CLINICAL_SHIFTS}
-    observed &= set(CLINICAL_SHIFTS)
-    merged = "".join(s for s in CLINICAL_SHIFTS if s in observed)
-    initial_permissions[nurse] = PARTTIME_ALLOWED_SHIFT if nurse in PART_TIME else (merged or "DEN")
+    auto_perm = auto_permissions.get(nurse, "DEN")
+    req_perm = request_permissions.get(nurse, "DEN")
+    initial_permissions[nurse] = auto_perm if auto_perm != "DEN" else req_perm
 
 st.subheader("👥 1. 人員權限與上月狀態")
 st.caption("權限、上月最後班、已連上天數會自動從上月2F班表擷取；仍可在下方手動修正。")
@@ -198,85 +193,179 @@ config_df = st.data_editor(
     },
 )
 
-st.subheader("📊 2. 每週最低人力")
-
-weeks_map = {}
-
-weeks_setup_data = []
-
-current_week_idx = 1
-
-last_week_no = None
-
-for i in range(num_days):
-
-    curr = start_date + datetime.timedelta(days=i)
-
-    year, week_no, weekday_no = curr.isocalendar()
-
-    if last_week_no is not None and week_no != last_week_no:
-        current_week_idx += 1
-
-    last_week_no = week_no
-
-    is_weekend = curr.weekday() in [5, 6]
-
-    week_label = f"第 {current_week_idx} 週"
-
-    day_type_label = (
-        "假日(六日)"
-        if is_weekend
-        else "平日(一五)"
-    )
-
-    weeks_map[i] = {
-        "week_label": week_label,
-        "is_weekend": is_weekend
-    }
-
-    key = f"{week_label} - {day_type_label}"
-
-    exist = [
-        x["週別與平假日"]
-        for x in weeks_setup_data
-    ]
-
-    if key not in exist:
-
-        if is_weekend:
-
-            weeks_setup_data.append({
-                "週別與平假日": key,
-                "week_id": week_label,
-                "is_we": True,
-                "D_min": 3,
-                "E_min": 2,
-                "N_min": 2
-            })
-
-        else:
-
-            weeks_setup_data.append({
-                "週別與平假日": key,
-                "week_id": week_label,
-                "is_we": False,
-                "D_min": 4,
-                "E_min": 3,
-                "N_min": 2
-            })
-
-weekly_df = st.data_editor(
-    pd.DataFrame(weeks_setup_data),
-    use_container_width=True,
-    num_rows="fixed",
-    column_config={
-        "週別與平假日":
-        st.column_config.TextColumn(
-            "週別與平假日",
-            disabled=True
-        )
-    }
+st.subheader("📊 2. 日期區間最低人力")
+st.caption(
+    "可直接設定『幾號到幾號』需要多少 D／E／N 人力；後面的設定列會覆蓋前面的重疊設定。"
 )
+
+# 預設：整個排班區間分成平日與假日兩筆規則
+# 使用實際日期而不是單純 1～31，跨月份時也能正確運作。
+default_manpower_rules = pd.DataFrame([
+    {
+        "開始日期": start_date,
+        "結束日期": end_date,
+        "適用日": "平日",
+        "D_min": 4,
+        "E_min": 3,
+        "N_min": 2,
+    },
+    {
+        "開始日期": start_date,
+        "結束日期": end_date,
+        "適用日": "假日",
+        "D_min": 3,
+        "E_min": 2,
+        "N_min": 2,
+    },
+])
+
+# 日期範圍改變時，重建預設設定；同一日期範圍內 rerun 則保留使用者編輯值。
+range_key = f"{start_date.isoformat()}_{end_date.isoformat()}"
+if st.session_state.get("manpower_range_key") != range_key:
+    st.session_state.manpower_range_key = range_key
+    st.session_state.manpower_rules_df = default_manpower_rules
+
+rule_df = st.data_editor(
+    st.session_state.manpower_rules_df,
+    key="manpower_range_editor",
+    num_rows="dynamic",
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "開始日期": st.column_config.DateColumn(
+            "開始日期",
+            min_value=start_date,
+            max_value=end_date,
+            required=True,
+            format="MM/DD",
+        ),
+        "結束日期": st.column_config.DateColumn(
+            "結束日期",
+            min_value=start_date,
+            max_value=end_date,
+            required=True,
+            format="MM/DD",
+        ),
+        "適用日": st.column_config.SelectboxColumn(
+            "適用日",
+            options=["全部", "平日", "假日"],
+            required=True,
+            help="全部：包含平日與六日；平日：週一至週五；假日：週六、週日。",
+        ),
+        "D_min": st.column_config.NumberColumn(
+            "白班 D 最低人力", min_value=0, max_value=len(CORE_STAFF), step=1, required=True
+        ),
+        "E_min": st.column_config.NumberColumn(
+            "小夜 E 最低人力", min_value=0, max_value=len(CORE_STAFF), step=1, required=True
+        ),
+        "N_min": st.column_config.NumberColumn(
+            "大夜 N 最低人力", min_value=0, max_value=len(CORE_STAFF), step=1, required=True
+        ),
+    },
+)
+
+# 保存目前編輯值，避免按其他元件造成 rerun 後消失。
+st.session_state.manpower_rules_df = rule_df.copy()
+
+# 先檢查區間設定是否合法。
+rule_errors = []
+clean_rules = []
+for row_no, (_, row) in enumerate(rule_df.iterrows(), start=1):
+    try:
+        rule_start = pd.to_datetime(row["開始日期"]).date()
+        rule_end = pd.to_datetime(row["結束日期"]).date()
+        day_type = str(row["適用日"]).strip()
+        d_min = int(row["D_min"])
+        e_min = int(row["E_min"])
+        n_min = int(row["N_min"])
+    except Exception:
+        rule_errors.append(f"第 {row_no} 列資料不完整或格式不正確。")
+        continue
+
+    if rule_start > rule_end:
+        rule_errors.append(f"第 {row_no} 列：開始日期不能晚於結束日期。")
+        continue
+    if rule_start < start_date or rule_end > end_date:
+        rule_errors.append(f"第 {row_no} 列：日期必須落在本次排班期間內。")
+        continue
+    if day_type not in ["全部", "平日", "假日"]:
+        rule_errors.append(f"第 {row_no} 列：適用日設定不正確。")
+        continue
+
+    clean_rules.append({
+        "開始日期": rule_start,
+        "結束日期": rule_end,
+        "適用日": day_type,
+        "D_min": d_min,
+        "E_min": e_min,
+        "N_min": n_min,
+        "列號": row_no,
+    })
+
+if rule_errors:
+    for message in rule_errors:
+        st.error(message)
+    st.stop()
+
+# 依每天日期套用規則。若多筆重疊，較後面的列優先，方便建立特殊日期覆蓋規則。
+manpower = []
+uncovered_dates = []
+preview_rows = []
+
+for day_index in range(num_days):
+    current_date = start_date + datetime.timedelta(days=day_index)
+    is_weekend = current_date.weekday() >= 5
+    current_type = "假日" if is_weekend else "平日"
+
+    matched_rule = None
+    for rule in clean_rules:
+        in_range = rule["開始日期"] <= current_date <= rule["結束日期"]
+        type_match = rule["適用日"] in ["全部", current_type]
+        if in_range and type_match:
+            # 不 break：讓後面的設定覆蓋前面的設定。
+            matched_rule = rule
+
+    if matched_rule is None:
+        uncovered_dates.append(current_date)
+        # 暫時填 0，下面會阻止啟動排班，避免默默使用錯誤預設值。
+        today_req = {"D_min": 0, "E_min": 0, "N_min": 0}
+        source_label = "未設定"
+    else:
+        today_req = {
+            "D_min": int(matched_rule["D_min"]),
+            "E_min": int(matched_rule["E_min"]),
+            "N_min": int(matched_rule["N_min"]),
+        }
+        source_label = f"第 {matched_rule['列號']} 列"
+
+    manpower.append(today_req)
+    preview_rows.append({
+        "日期": current_date,
+        "星期": ["一", "二", "三", "四", "五", "六", "日"][current_date.weekday()],
+        "類型": current_type,
+        "D_min": today_req["D_min"],
+        "E_min": today_req["E_min"],
+        "N_min": today_req["N_min"],
+        "套用來源": source_label,
+    })
+
+if uncovered_dates:
+    missing_text = "、".join(d.strftime("%m/%d") for d in uncovered_dates[:12])
+    if len(uncovered_dates) > 12:
+        missing_text += f" 等共 {len(uncovered_dates)} 天"
+    st.error(f"以下日期尚未設定最低人力：{missing_text}")
+    st.info("請新增一筆涵蓋這些日期的規則，或建立整段日期的『全部／平日／假日』基本規則。")
+    st.stop()
+
+with st.expander("🔎 預覽每天實際套用的人力需求", expanded=False):
+    st.dataframe(
+        pd.DataFrame(preview_rows),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "日期": st.column_config.DateColumn("日期", format="MM/DD"),
+        },
+    )
 
 permissions = {}
 history_shift_final = {}
@@ -287,39 +376,10 @@ for _, row in config_df.iterrows():
     history_shift_final[name] = str(row["上月最後班"]).strip()
     history_streak_final[name] = int(row["已連上天數"])
 
-manpower = []
-
-for d in range(num_days):
-
-    info = weeks_map[d]
-
-    selected = weekly_df[
-        (weekly_df["week_id"] == info["week_label"])
-        &
-        (weekly_df["is_we"] == info["is_weekend"])
-    ].iloc[0]
-
-    manpower.append({
-        "D_min": int(selected["D_min"]),
-        "E_min": int(selected["E_min"]),
-        "N_min": int(selected["N_min"])
-    })
-
 st.divider()
 run = st.button("🚀 啟動 AI 最佳化排班", type="primary", use_container_width=True)
 
 if run:
-    preflight_issues = validate_inputs(
-        CORE_STAFF, permissions, requests, manpower, history_shift_final, history_streak_final
-    )
-    feasibility_issues = check_feasibility(CORE_STAFF, permissions, requests, manpower)
-    blocking = [x for x in preflight_issues + feasibility_issues if x.get("severity") == "error"]
-
-    if blocking:
-        st.error("排班前檢查未通過，請先修正下列問題。")
-        st.dataframe(issues_to_dataframe(blocking, date_headers), use_container_width=True)
-        st.stop()
-
     progress = st.progress(0)
     status = st.empty()
 
@@ -340,10 +400,7 @@ if run:
     )
     st.session_state.best_result = best
     st.session_state.top_results = top
-    if any(x.get("severity") == "error" for x in best.get("issues", [])):
-        st.warning(f"已找到目前最佳結果，但仍有硬性錯誤；系統不會將它標示為完全成功。分數：{best['score']}")
-    else:
-        st.success(f"排班完成，所有硬性規則已通過。最佳分數：{best['score']}")
+    st.success(f"排班完成，最佳分數：{best['score']}")
 
 if st.session_state.best_result:
     best = st.session_state.best_result
@@ -354,8 +411,7 @@ if st.session_state.best_result:
         CORE_STAFF,
         manpower,
         history_shift_final,
-        requests,
-        history_streak_final
+        requests
     )
     issues_df = issues_to_dataframe(issues, date_headers)
 
