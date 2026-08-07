@@ -37,6 +37,12 @@ with st.sidebar:
     file_history = st.file_uploader("上傳【上月班表】", type=["xls", "xlsx"])
     file_request = st.file_uploader("上傳【當月要班需求】", type=["csv", "xls", "xlsx"])
 
+    auto_use_request_dates = st.checkbox(
+        "自動使用要班需求檔日期",
+        value=False,
+        help="關閉時，以你上方手動選擇的開始／結束日期為準；開啟時，才會改用要班需求檔中的日期。"
+    )
+
     st.divider()
     st.header("🧠 AI最佳化")
     attempts = st.slider("排班嘗試次數", 10, 500, 100, step=10)
@@ -46,19 +52,37 @@ if end_date < start_date:
     st.error("結束日期不能早於開始日期。")
     st.stop()
 
-# 若要班需求檔含日期，直接採用檔案日期，避免使用者選錯區間。
+# 要班需求檔日期僅作為提示；是否套用由使用者決定。
+detected_start = None
+detected_end = None
+
 if file_request is not None:
     try:
         detected_start, detected_end = detect_file_date_range(file_request)
-        if (start_date, end_date) != (detected_start, detected_end):
-            st.info(
-                f"已依要班需求檔自動套用排班期間："
-                f"{detected_start.strftime('%Y/%m/%d')} ～ {detected_end.strftime('%Y/%m/%d')}"
+
+        if auto_use_request_dates:
+            if (start_date, end_date) != (detected_start, detected_end):
+                st.info(
+                    f"已依要班需求檔自動套用排班期間："
+                    f"{detected_start.strftime('%Y/%m/%d')} ～ "
+                    f"{detected_end.strftime('%Y/%m/%d')}"
+                )
+
+            start_date, end_date = detected_start, detected_end
+
+        elif (start_date, end_date) != (detected_start, detected_end):
+            st.warning(
+                "目前使用你手動選擇的排班期間："
+                f"{start_date.strftime('%Y/%m/%d')} ～ "
+                f"{end_date.strftime('%Y/%m/%d')}。"
+                "要班需求檔內日期為："
+                f"{detected_start.strftime('%Y/%m/%d')} ～ "
+                f"{detected_end.strftime('%Y/%m/%d')}。"
+                "若要自動跟隨檔案日期，請勾選左側「自動使用要班需求檔日期」。"
             )
-        start_date, end_date = detected_start, detected_end
+
     except Exception as exc:
-        st.error(f"無法辨識要班需求檔日期：{exc}")
-        st.stop()
+        st.warning(f"無法辨識要班需求檔日期，將使用手動日期：{exc}")
 
 num_days = (end_date - start_date).days + 1
 expected_dates = [start_date + datetime.timedelta(days=i) for i in range(num_days)]
@@ -127,7 +151,10 @@ config_df = st.data_editor(
 
 st.subheader("📊 2. 日期區間最低人力")
 st.caption(
-    "可直接設定『幾號到幾號』需要多少 D／E／N 人力；後面的設定列會覆蓋前面的重疊設定。"
+    f"目前排班期間：{start_date.strftime('%Y/%m/%d')} ～ "
+    f"{end_date.strftime('%Y/%m/%d')}。"
+    "下方日期區間會隨左側開始／結束日期自動重建；"
+    "後面的設定列會覆蓋前面的重疊設定。"
 )
 
 # 預設：整個排班區間分成平日與假日兩筆規則
@@ -157,9 +184,15 @@ if st.session_state.get("manpower_range_key") != range_key:
     st.session_state.manpower_range_key = range_key
     st.session_state.manpower_rules_df = default_manpower_rules
 
+manpower_editor_key = (
+    f"manpower_range_editor_"
+    f"{start_date.isoformat()}_"
+    f"{end_date.isoformat()}"
+)
+
 rule_df = st.data_editor(
     st.session_state.manpower_rules_df,
-    key="manpower_range_editor",
+    key=manpower_editor_key,
     num_rows="dynamic",
     use_container_width=True,
     hide_index=True,
