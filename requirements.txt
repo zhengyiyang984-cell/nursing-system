@@ -3,3 +3,4 @@ pandas>=2.0
 openpyxl>=3.1
 
 # V24 uses the existing heuristic solver; no extra runtime dependency required.
+xlrd>=2.0.1
