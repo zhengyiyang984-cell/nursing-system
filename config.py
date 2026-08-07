@@ -69,3 +69,12 @@ SCORE_WEIGHTS = {
     "night_fairness": 20,
     "workload_fairness": 10,
 }
+PERMISSION_OPTIONS = [
+    "DEN",
+    "DE",
+    "DN",
+    "EN",
+    "D",
+    "E",
+    "N",
+]
