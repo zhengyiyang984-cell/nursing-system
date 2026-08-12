@@ -713,6 +713,83 @@ if st.session_state.best_result:
         ignore_index=True
     )
 
+    # =====================================================
+    # 最終班表問題標示
+    # =====================================================
+    # 1) 人力多/少：D/E/N 實際人數只要不等於設定的最低人力，就標紅。
+    # 2) 規則檢查：有指定「人員 + 日期」的問題，直接標紅該格。
+    # 3) 全月型問題（例如休假不足、連上過長），將該人姓名標紅。
+    manpower_problem_cells = set()
+    rule_problem_cells = set()
+    rule_problem_names = set()
+
+    for day_idx, day_header in enumerate(date_headers):
+        for shift, row_name in [
+            (SHIFT_D, "D人力"),
+            (SHIFT_E, "E人力"),
+            (SHIFT_N, "N人力"),
+        ]:
+            actual = sum(
+                1 for nurse in active_staff
+                if schedule[nurse][day_idx] == shift
+            )
+            required = int(manpower[day_idx].get(f"{shift}_min", 0) or 0)
+
+            if actual != required:
+                manpower_problem_cells.add((row_name, day_header))
+
+    for issue in issues:
+        nurse = str(issue.get("nurse", "") or "").strip()
+        day_idx = issue.get("day")
+
+        if nurse and isinstance(day_idx, int) and 0 <= day_idx < len(date_headers):
+            rule_problem_cells.add((nurse, date_headers[day_idx]))
+        elif nurse:
+            rule_problem_names.add(nurse)
+
+    def style_final_schedule(df):
+        styles = pd.DataFrame("", index=df.index, columns=df.columns)
+
+        # 班別權限：正常情況固定淺藍底。
+        if "班別權限" in df.columns:
+            for idx in df.index:
+                value = str(df.at[idx, "班別權限"]).strip()
+                if value:
+                    styles.at[idx, "班別權限"] = (
+                        "background-color: #D9EAF7; "
+                        "color: #000000; "
+                        "font-weight: bold;"
+                    )
+
+        # 規則檢查有指定日期的問題。
+        for idx in df.index:
+            name = str(df.at[idx, "姓名"]).strip() if "姓名" in df.columns else ""
+
+            if name in rule_problem_names and "姓名" in df.columns:
+                styles.at[idx, "姓名"] = (
+                    "background-color: #FFC7CE; "
+                    "color: #9C0006; "
+                    "font-weight: bold;"
+                )
+
+            for col in date_headers:
+                if col not in df.columns:
+                    continue
+
+                if (name, col) in rule_problem_cells or (name, col) in manpower_problem_cells:
+                    styles.at[idx, col] = (
+                        "background-color: #FFC7CE; "
+                        "color: #9C0006; "
+                        "font-weight: bold;"
+                    )
+
+        return styles
+
+    schedule_styler = (
+        schedule_df.style
+        .apply(style_final_schedule, axis=None)
+    )
+
     daily_df = build_manpower_dataframe(
         schedule,
         active_staff,
@@ -753,8 +830,12 @@ if st.session_state.best_result:
 
         with col1:
             st.subheader("📅 最終班表")
+            st.caption(
+                "🔴 紅色＝當日人力多/少於設定，或規則檢查有問題；"
+                "淺藍色＝班別權限。正常班別 D/E/N 不上色。"
+            )
             st.dataframe(
-                schedule_df,
+                schedule_styler,
                 use_container_width=True,
                 height=620
             )
@@ -805,7 +886,9 @@ if st.session_state.best_result:
         daily_df,
         person_df,
         issues_df,
-        leave_export_df
+        leave_export_df,
+        problem_cells=rule_problem_cells,
+        problem_names=rule_problem_names,
     )
 
     st.download_button(
