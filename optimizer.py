@@ -170,15 +170,36 @@ def optimize_schedule(
     manpower,
     history_shift,
     history_streak,
-    attempts=100,
+    attempts=60,
     base_seed=None,
     progress_callback=None,
+    local_search_top=3,
+    local_search_rounds=8,
+    patience=15,
 ):
-    best = None
-    results = []
+    """
+    V26.5 加速版：
+    1. 第一階段只快速建立候選班表 + 評分，不對每一份都跑 Local Search。
+    2. 只挑前幾名候選做 Local Search。
+    3. 連續多次沒有改善時提早停止。
+    4. 一旦得到 0 error 的高品質班表，可提前結束。
+
+    舊版：attempts × 20 次 local search。
+    新版：attempts 次快速候選 + 前 local_search_top 名才做 local search。
+    """
     rng = random.Random(base_seed)
     attempts = max(1, int(attempts))
+    local_search_top = max(1, int(local_search_top))
+    local_search_rounds = max(0, int(local_search_rounds))
+    patience = max(3, int(patience))
 
+    candidates = []
+    best = None
+    no_improve = 0
+
+    # ==============================
+    # Stage 1：快速產生候選班表
+    # ==============================
     for i in range(attempts):
         seed = rng.randint(1, 10_000_000)
 
@@ -192,15 +213,13 @@ def optimize_schedule(
             seed=seed,
         )
 
-        schedule, score, issues = _local_search(
+        score, issues = score_schedule(
             schedule,
             names,
             manpower,
             history_shift,
             requests,
             history_streak,
-            random.Random(seed + 99),
-            rounds=20,
         )
 
         item = {
@@ -210,23 +229,96 @@ def optimize_schedule(
             "schedule": schedule,
             "seed": seed,
         }
-        results.append(item)
+        candidates.append(item)
 
-        if best is None or quality_key(item) < quality_key(best):
+        improved = best is None or quality_key(item) < quality_key(best)
+
+        if improved:
             best = item
+            no_improve = 0
+        else:
+            no_improve += 1
 
         if progress_callback:
             progress_callback(i + 1, attempts, best["score"])
 
-        if (
-            best
-            and not any(x.get("severity") == "error" for x in best.get("issues", []))
-            and i >= min(8, attempts - 1)
-        ):
+        best_errors = sum(
+            1 for x in best.get("issues", [])
+            if x.get("severity") == "error"
+        )
+        best_warnings = sum(
+            1 for x in best.get("issues", [])
+            if x.get("severity") != "error"
+        )
+
+        # 已經得到無 error 的結果，不必浪費大量嘗試。
+        if best_errors == 0 and i >= min(7, attempts - 1):
+            # warning 很少時直接進入第二階段
+            if best_warnings <= 3:
+                break
+
+            # 雖有 warning，但很久沒改善也停止
+            if no_improve >= max(6, patience // 2):
+                break
+
+        # 一直沒有改善就停止
+        if i >= 12 and no_improve >= patience:
             break
 
+    # 只保留品質最好的候選，避免大量 schedule 留在記憶體。
+    candidates.sort(key=quality_key)
+    shortlist = candidates[:min(local_search_top, len(candidates))]
+
+    # ==============================
+    # Stage 2：只精修前幾名
+    # ==============================
+    refined = []
+
+    for item in shortlist:
+        if local_search_rounds <= 0:
+            refined.append(item)
+            continue
+
+        seed = item["seed"]
+
+        schedule, score, issues = _local_search(
+            item["schedule"],
+            names,
+            manpower,
+            history_shift,
+            requests,
+            history_streak,
+            random.Random(seed + 99),
+            rounds=local_search_rounds,
+        )
+
+        refined.append({
+            "rank": None,
+            "score": score,
+            "issues": issues,
+            "schedule": schedule,
+            "seed": seed,
+        })
+
+    # 原候選 + 精修候選一起比較
+    results = candidates[:10] + refined
     results.sort(key=quality_key)
-    for idx, item in enumerate(results, start=1):
+
+    # 去除相同 seed 的較差重複版本，只留品質最好者
+    unique = []
+    seen_seed = set()
+
+    for item in results:
+        seed = item["seed"]
+        if seed in seen_seed:
+            continue
+        seen_seed.add(seed)
+        unique.append(item)
+
+    best = unique[0] if unique else best
+
+    for idx, item in enumerate(unique, start=1):
         item["rank"] = idx
 
-    return best, results[:10]
+    return best, unique[:10]
+

@@ -45,7 +45,46 @@ with st.sidebar:
 
     st.divider()
     st.header("🧠 AI最佳化")
-    attempts = st.slider("排班嘗試次數", 10, 500, 100, step=10)
+
+    speed_mode = st.selectbox(
+        "排班速度模式",
+        ["⚡ 快速", "⚖️ 平衡", "🎯 高品質"],
+        index=1,
+        help="快速：適合反覆測試；平衡：日常使用；高品質：最後正式排班。"
+    )
+
+    if speed_mode == "⚡ 快速":
+        attempts = 25
+        local_search_top = 2
+        local_search_rounds = 4
+        patience = 8
+    elif speed_mode == "⚖️ 平衡":
+        attempts = 50
+        local_search_top = 3
+        local_search_rounds = 8
+        patience = 12
+    else:
+        attempts = 100
+        local_search_top = 5
+        local_search_rounds = 15
+        patience = 20
+
+    st.caption(
+        f"目前模式：最多 {attempts} 次候選；"
+        f"只精修前 {local_search_top} 名，每名 {local_search_rounds} 輪。"
+    )
+
+    advanced_attempts = st.checkbox("手動調整嘗試次數", value=False)
+
+    if advanced_attempts:
+        attempts = st.slider(
+            "排班嘗試次數",
+            10,
+            300,
+            attempts,
+            step=10
+        )
+
     seed = st.number_input("隨機種子（可留 0）", min_value=0, value=0, step=1)
 
 if end_date < start_date:
@@ -641,6 +680,9 @@ if run:
         attempts=attempts,
         base_seed=None if seed == 0 else int(seed),
         progress_callback=update_progress,
+        local_search_top=local_search_top,
+        local_search_rounds=local_search_rounds,
+        patience=patience,
     )
     st.session_state.best_result = best
     st.session_state.top_results = top
@@ -803,7 +845,7 @@ if st.session_state.best_result:
     c1, c2, c3 = st.columns(3)
     c1.metric("最佳分數", best["score"])
     c2.metric("違規/提醒數", len(issues))
-    c3.metric("嘗試次數", attempts)
+    c3.metric("最多嘗試次數", attempts)
 
     if st.session_state.top_results:
         ranking_df = pd.DataFrame([
