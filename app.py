@@ -377,17 +377,52 @@ leave_range_key = (
 
 if st.session_state.get("leave_range_key") != leave_range_key:
     st.session_state.leave_range_key = leave_range_key
-    st.session_state.leave_records_df = pd.DataFrame(
-        columns=["生效", "姓名", "假別", "開始日期", "結束日期", "備註"]
-    )
+
+    # Streamlit 的 DateColumn / CheckboxColumn 需要相容的 pandas dtype。
+    # 空 DataFrame 若全部是 object dtype，會觸發 StreamlitAPIException。
+    st.session_state.leave_records_df = pd.DataFrame({
+        "生效": pd.Series(dtype="bool"),
+        "姓名": pd.Series(dtype="string"),
+        "假別": pd.Series(dtype="string"),
+        "開始日期": pd.Series(dtype="datetime64[ns]"),
+        "結束日期": pd.Series(dtype="datetime64[ns]"),
+        "備註": pd.Series(dtype="string"),
+    })
 
 leave_editor_key = (
     f"leave_editor_{start_date.isoformat()}_{end_date.isoformat()}_"
     f"{len(active_staff)}"
 )
 
+# 舊版 session_state 若已建立過 object dtype 的空表，
+# 在進入 data_editor 前重新整理欄位型別。
+_leave_source = st.session_state.leave_records_df.copy()
+
+for _col in ["姓名", "假別", "備註"]:
+    if _col not in _leave_source.columns:
+        _leave_source[_col] = pd.Series(dtype="string")
+    else:
+        _leave_source[_col] = _leave_source[_col].astype("string")
+
+if "生效" not in _leave_source.columns:
+    _leave_source["生效"] = pd.Series(dtype="bool")
+elif not _leave_source.empty:
+    _leave_source["生效"] = _leave_source["生效"].fillna(True).astype(bool)
+else:
+    _leave_source["生效"] = pd.Series(dtype="bool")
+
+for _col in ["開始日期", "結束日期"]:
+    if _col not in _leave_source.columns:
+        _leave_source[_col] = pd.Series(dtype="datetime64[ns]")
+    else:
+        _leave_source[_col] = pd.to_datetime(_leave_source[_col], errors="coerce")
+
+_leave_source = _leave_source[
+    ["生效", "姓名", "假別", "開始日期", "結束日期", "備註"]
+]
+
 leave_df = st.data_editor(
-    st.session_state.leave_records_df,
+    _leave_source,
     key=leave_editor_key,
     num_rows="dynamic",
     use_container_width=True,
