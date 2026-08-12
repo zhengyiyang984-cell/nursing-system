@@ -121,9 +121,35 @@ def _try_move_shift(schedule, names, requests, manpower, shift, day, rng):
     return False
 
 
+def _issues_quality(issues, score):
+    """硬性錯誤永遠優先；只有錯誤相同時才比較 warning 與 score。"""
+    errors = [x for x in issues if x.get("severity") == "error"]
+    warnings = [x for x in issues if x.get("severity") != "error"]
+
+    manpower = sum(1 for x in errors if "人力" in str(x.get("category", "")))
+    requests_err = sum(1 for x in errors if "預排" in str(x.get("category", "")))
+    nights = sum(1 for x in errors if "大夜" in str(x.get("category", "")))
+    transitions = sum(1 for x in errors if "銜接" in str(x.get("category", "")))
+    streaks = sum(1 for x in errors if "連續上班" in str(x.get("category", "")))
+    holidays = sum(1 for x in errors if "休假不足" in str(x.get("category", "")))
+
+    return (
+        len(errors),
+        manpower,
+        requests_err,
+        nights,
+        transitions,
+        streaks,
+        holidays,
+        len(warnings),
+        -float(score),
+    )
+
+
 def _local_search(schedule, names, manpower, history_shift, requests, history_streak, rng, rounds=20):
     best = deepcopy(schedule)
     best_score, best_issues = score_schedule(best, names, manpower, history_shift, requests, history_streak)
+    best_quality = _issues_quality(best_issues, best_score)
 
     for _ in range(rounds):
         trial = deepcopy(best)
@@ -141,27 +167,25 @@ def _local_search(schedule, names, manpower, history_shift, requests, history_st
             continue
 
         s, issues = score_schedule(trial, names, manpower, history_shift, requests, history_streak)
-        if s > best_score:
-            best, best_score, best_issues = trial, s, issues
+        trial_quality = _issues_quality(issues, s)
+
+        # V27：絕不接受 error 數更多的 trial。
+        if trial_quality < best_quality:
+            best = trial
+            best_score = s
+            best_issues = issues
+            best_quality = trial_quality
 
     return best, best_score, best_issues
 
 
 
 def quality_key(item):
-    """字典序品質：硬性錯誤永遠優先於公平性分數。"""
-    issues = item.get("issues", [])
-    errors = [x for x in issues if x.get("severity") == "error"]
-    warnings = [x for x in issues if x.get("severity") != "error"]
-
-    manpower = sum(1 for x in errors if "每日人力" in str(x.get("category", "")))
-    requests = sum(1 for x in errors if "預排" in str(x.get("category", "")))
-    nights = sum(1 for x in errors if "大夜" in str(x.get("category", "")))
-    streaks = sum(1 for x in errors if "連續上班" in str(x.get("category", "")))
-    holidays = sum(1 for x in errors if "休假不足" in str(x.get("category", "")))
-
-    # 越小越好；score 取負值讓較高分排前面。
-    return (len(errors), manpower, requests, nights, streaks, holidays, len(warnings), -float(item.get("score", 0)))
+    """V27：0 Error 永遠排在任何含 Error 的班表前面。"""
+    return _issues_quality(
+        item.get("issues", []),
+        float(item.get("score", 0)),
+    )
 
 def optimize_schedule(
     names,

@@ -746,12 +746,8 @@ class NurseScheduler:
             self.schedule[candidates[0]][day] = shift
             return True
 
-        # 第二輪：醫院模式，最低人力優先，可暫時放寬連班，後續再修
-        candidates = self._clinical_candidates(day, shift, relax_streak=True)
-        if candidates:
-            self.schedule[candidates[0]][day] = shift
-            return True
-
+        # V27：硬性規則優先。找不到合法人員時不要用「放寬連班」硬塞，
+        # 否則會用一個人力錯誤換成連班錯誤。後續交給跨日交換/其他候選處理。
         return False
 
     def _repair_manpower_shortage(self, max_rounds=3):
@@ -1375,8 +1371,12 @@ class NurseScheduler:
             if self._prev(nurse, day) == SHIFT_N and shift not in [SHIFT_N, SHIFT_OFF, SHIFT_R]:
                 continue
 
-            # E 後不接 D，盡量保留
+            # E 後不接 D。
             if shift == SHIFT_D and self._prev(nurse, day) == SHIFT_E:
+                continue
+
+            # V27：最後補人也不能製造超過最大連班。
+            if not self._max_streak_ok(nurse, day, shift):
                 continue
 
             options.append((

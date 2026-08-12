@@ -13,6 +13,7 @@ from utils import make_date_headers, default_manpower_by_dates
 from optimizer import optimize_schedule
 from schedule_statistics import build_schedule_dataframe, build_manpower_dataframe, build_person_statistics
 from validator import validate_schedule, issues_to_dataframe
+from feasibility import check_feasibility
 from exporter import export_workbook
 
 # =====================================================
@@ -659,6 +660,46 @@ if impossible_days:
         st.write(f"• 另外還有 {len(impossible_days) - 10} 天")
     st.stop()
 
+# =====================================================
+# V27：正式排班前先做硬性條件可行性檢查
+# =====================================================
+feasibility_issues = check_feasibility(
+    active_staff,
+    permissions,
+    active_requests,
+    manpower,
+    history_shift_final,
+    history_streak_final,
+)
+
+feasibility_errors = [
+    item for item in feasibility_issues
+    if item.get("severity") == "error"
+]
+
+if feasibility_errors:
+    st.error(
+        f"⛔ 排班前可行性檢查發現 {len(feasibility_errors)} 個硬性衝突，"
+        "目前條件很可能無法產生 0 Error 班表。"
+    )
+
+    feasibility_df = issues_to_dataframe(
+        feasibility_errors,
+        date_headers
+    )
+    st.dataframe(
+        feasibility_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.info(
+        "請先調整請假/預排、班別權限或最低人力。"
+        "修正後系統才會開放正式排班，避免浪費時間產生錯誤班表。"
+    )
+    st.stop()
+else:
+    st.success("✅ 排班前硬性條件檢查通過，可以開始搜尋 0 Error 班表。")
+
 st.divider()
 run = st.button("🚀 啟動 AI 最佳化排班", type="primary", use_container_width=True)
 
@@ -686,7 +727,19 @@ if run:
     )
     st.session_state.best_result = best
     st.session_state.top_results = top
-    st.success(f"排班完成，最佳分數：{best['score']}")
+
+    best_error_count = sum(
+        1 for item in best.get("issues", [])
+        if item.get("severity") == "error"
+    )
+
+    if best_error_count == 0:
+        st.success(f"✅ 排班完成：0 Error，最佳分數：{best['score']}")
+    else:
+        st.warning(
+            f"排班完成，但最佳結果仍有 {best_error_count} 個 Error。"
+            "系統已優先選擇 Error 最少的班表，請查看規則檢查。"
+        )
 
 if st.session_state.best_result:
     best = st.session_state.best_result
