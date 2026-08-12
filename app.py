@@ -361,6 +361,147 @@ if not active_staff:
 if inactive_staff:
     st.info("本次不參與排班：" + "、".join(inactive_staff))
 
+# =====================================================
+# 3. 請假管理
+# =====================================================
+st.subheader("🏖️ 3. 請假管理")
+st.caption(
+    "可新增多筆請假。請假日期會自動鎖定為不可排 D／E／N，"
+    "並在最終班表與 Excel 顯示實際假別。"
+)
+
+leave_range_key = (
+    f"{start_date.isoformat()}_{end_date.isoformat()}_"
+    + "_".join(active_staff)
+)
+
+if st.session_state.get("leave_range_key") != leave_range_key:
+    st.session_state.leave_range_key = leave_range_key
+    st.session_state.leave_records_df = pd.DataFrame(
+        columns=["生效", "姓名", "假別", "開始日期", "結束日期", "備註"]
+    )
+
+leave_editor_key = (
+    f"leave_editor_{start_date.isoformat()}_{end_date.isoformat()}_"
+    f"{len(active_staff)}"
+)
+
+leave_df = st.data_editor(
+    st.session_state.leave_records_df,
+    key=leave_editor_key,
+    num_rows="dynamic",
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "生效": st.column_config.CheckboxColumn(
+            "生效",
+            default=True,
+            help="取消勾選後，該筆請假不會套用到本次排班。",
+        ),
+        "姓名": st.column_config.SelectboxColumn(
+            "姓名",
+            options=active_staff,
+            required=True,
+        ),
+        "假別": st.column_config.SelectboxColumn(
+            "假別",
+            options=LEAVE_TYPES,
+            required=True,
+        ),
+        "開始日期": st.column_config.DateColumn(
+            "開始日期",
+            min_value=start_date,
+            max_value=end_date,
+            format="MM/DD",
+            required=True,
+        ),
+        "結束日期": st.column_config.DateColumn(
+            "結束日期",
+            min_value=start_date,
+            max_value=end_date,
+            format="MM/DD",
+            required=True,
+        ),
+        "備註": st.column_config.TextColumn(
+            "備註",
+            help="選填，例如：住院、家庭事務、研習等。",
+        ),
+    },
+)
+
+st.session_state.leave_records_df = leave_df.copy()
+
+leave_errors = []
+leave_warnings = []
+clean_leave_records = []
+leave_detail_rows = []
+
+for row_no, (_, row) in enumerate(leave_df.iterrows(), start=1):
+    if not bool(row.get("生效", True)):
+        continue
+
+    try:
+        nurse = str(row["姓名"]).strip()
+        leave_type = str(row["假別"]).strip()
+        leave_start = pd.to_datetime(row["開始日期"]).date()
+        leave_end = pd.to_datetime(row["結束日期"]).date()
+        note = "" if pd.isna(row.get("備註", "")) else str(row.get("備註", "")).strip()
+    except Exception:
+        leave_errors.append(f"第 {row_no} 筆請假資料不完整。")
+        continue
+
+    if nurse not in active_staff:
+        leave_errors.append(f"第 {row_no} 筆：{nurse} 目前未參與排班。")
+        continue
+    if leave_type not in LEAVE_TYPES:
+        leave_errors.append(f"第 {row_no} 筆：假別不正確。")
+        continue
+    if leave_start > leave_end:
+        leave_errors.append(f"第 {row_no} 筆：開始日期不能晚於結束日期。")
+        continue
+    if leave_start < start_date or leave_end > end_date:
+        leave_errors.append(f"第 {row_no} 筆：請假日期必須落在本次排班期間內。")
+        continue
+
+    clean_leave_records.append({
+        "姓名": nurse,
+        "假別": leave_type,
+        "開始日期": leave_start,
+        "結束日期": leave_end,
+        "備註": note,
+    })
+
+    leave_detail_rows.append({
+        "姓名": nurse,
+        "假別": leave_type,
+        "開始日期": leave_start,
+        "結束日期": leave_end,
+        "天數": (leave_end - leave_start).days + 1,
+        "備註": note,
+    })
+
+if leave_errors:
+    for message in leave_errors:
+        st.error(message)
+    st.stop()
+
+leave_export_df = pd.DataFrame(
+    leave_detail_rows,
+    columns=["姓名", "假別", "開始日期", "結束日期", "天數", "備註"]
+)
+
+if clean_leave_records:
+    with st.expander("📋 查看本次請假紀錄", expanded=False):
+        st.dataframe(
+            leave_export_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "開始日期": st.column_config.DateColumn("開始日期", format="MM/DD"),
+                "結束日期": st.column_config.DateColumn("結束日期", format="MM/DD"),
+            },
+        )
+
 permissions = {}
 history_shift_final = {}
 history_streak_final = {}
@@ -376,9 +517,41 @@ for _, row in config_df.iterrows():
     history_streak_final[name] = int(row["已連上天數"])
 
 active_requests = {
-    name: requests.get(name, [""] * num_days)
+    name: list(requests.get(name, [""] * num_days))
     for name in active_staff
 }
+
+# 請假在排班核心中轉成 R，確保 Scheduler 不會安排 D/E/N。
+# 同一天若原本已有 D/E/N/M 預排，請假優先，並在畫面提醒。
+leave_display_map = {}
+
+for record in clean_leave_records:
+    nurse = record["姓名"]
+    leave_type = record["假別"]
+    leave_code = LEAVE_DISPLAY_CODES.get(leave_type, leave_type)
+
+    current_date = record["開始日期"]
+    while current_date <= record["結束日期"]:
+        day_idx = (current_date - start_date).days
+
+        if 0 <= day_idx < num_days:
+            original_req = active_requests[nurse][day_idx]
+
+            if original_req not in ["", SHIFT_R, SHIFT_OFF]:
+                leave_warnings.append(
+                    f"{nurse} {current_date.strftime('%m/%d')} "
+                    f"原預排為 {original_req}，已由「{leave_type}」覆蓋。"
+                )
+
+            active_requests[nurse][day_idx] = SHIFT_R
+            leave_display_map[(nurse, day_idx)] = leave_code
+
+        current_date += datetime.timedelta(days=1)
+
+if leave_warnings:
+    with st.expander("⚠️ 請假與原預排衝突提醒", expanded=False):
+        for message in sorted(set(leave_warnings)):
+            st.warning(message)
 
 PART_TIME[:] = [name for name in PART_TIME if name in active_staff]
 
@@ -387,13 +560,21 @@ st.success(
     f"不排班 {len(inactive_staff)} 人。"
 )
 
-# 排班前快速檢查：最低總人力不可超過目前勾選人數
+# 排班前快速檢查：最低總人力不可超過當天實際可排人數
 impossible_days = []
 for day_idx, req in enumerate(manpower):
     total_min = int(req["D_min"]) + int(req["E_min"]) + int(req["N_min"])
-    if total_min > len(active_staff):
+
+    people_on_leave = sum(
+        1 for nurse in active_staff
+        if active_requests[nurse][day_idx] == SHIFT_R
+    )
+    available_count = len(active_staff) - people_on_leave
+
+    if total_min > available_count:
         impossible_days.append(
-            f"{date_headers[day_idx]}：最低需要 {total_min} 人，但目前只有 {len(active_staff)} 人參與排班"
+            f"{date_headers[day_idx]}：最低需要 {total_min} 人，"
+            f"當天請假/預休 {people_on_leave} 人，可排人數僅 {available_count} 人"
         )
 
 if impossible_days:
@@ -454,6 +635,13 @@ if st.session_state.best_result:
         date_headers,
         permissions
     )
+
+    # 顯示用班表：內部 R 仍保留給 Validator/統計，
+    # 畫面與 Excel 則顯示實際假別（特休、病假、事假...）。
+    for (nurse, day_idx), leave_code in leave_display_map.items():
+        if day_idx < len(date_headers):
+            mask = schedule_df["姓名"] == nurse
+            schedule_df.loc[mask, date_headers[day_idx]] = leave_code
 
     # ===== 人力統計直接加到班表底部 =====
     d_row = {col: "" for col in schedule_df.columns}
@@ -521,7 +709,8 @@ if st.session_state.best_result:
 
     tabs = st.tabs([
         "📅 最終班表",
-        "🔍 規則檢查"
+        "🔍 規則檢查",
+        "🏖️ 請假紀錄"
     ])
 
     with tabs[0]:
@@ -553,11 +742,35 @@ if st.session_state.best_result:
                 use_container_width=True
             )
 
+    with tabs[2]:
+        if leave_export_df.empty:
+            st.info("本次沒有新增請假紀錄。")
+        else:
+            st.dataframe(
+                leave_export_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "開始日期": st.column_config.DateColumn("開始日期", format="MM/DD"),
+                    "結束日期": st.column_config.DateColumn("結束日期", format="MM/DD"),
+                },
+            )
+
+            leave_summary_df = (
+                leave_export_df
+                .groupby(["姓名", "假別"], as_index=False)["天數"]
+                .sum()
+                .sort_values(["姓名", "假別"])
+            )
+            st.subheader("📊 請假統計")
+            st.dataframe(leave_summary_df, use_container_width=True, hide_index=True)
+
     excel_bytes = export_workbook(
         schedule_df,
         daily_df,
         person_df,
-        issues_df
+        issues_df,
+        leave_export_df
     )
 
     st.download_button(

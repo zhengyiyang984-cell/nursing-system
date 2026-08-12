@@ -5,13 +5,15 @@ from openpyxl.utils import get_column_letter
 from config import SHIFT_COLORS
 
 
-def export_workbook(schedule_df, manpower_df, person_df, issues_df):
+def export_workbook(schedule_df, manpower_df, person_df, issues_df, leave_df=None):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         schedule_df.to_excel(writer, sheet_name="班表")
         manpower_df.to_excel(writer, sheet_name="每日人力", index=False)
         person_df.to_excel(writer, sheet_name="個人統計", index=False)
         issues_df.to_excel(writer, sheet_name="違規檢查", index=False)
+        if leave_df is not None and not leave_df.empty:
+            leave_df.to_excel(writer, sheet_name="請假紀錄", index=False)
 
         wb = writer.book
         for ws in wb.worksheets:
