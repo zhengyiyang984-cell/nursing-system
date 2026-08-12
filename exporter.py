@@ -2,7 +2,7 @@ from io import BytesIO
 import pandas as pd
 from openpyxl.styles import PatternFill, Alignment, Font, Border, Side
 from openpyxl.utils import get_column_letter
-from config import SHIFT_COLORS
+from config import PERMISSION_CELL_COLOR
 
 
 def export_workbook(schedule_df, manpower_df, person_df, issues_df, leave_df=None):
@@ -44,10 +44,51 @@ def style_sheet(ws):
 
 
 def color_schedule_sheet(ws):
+    """
+    最終班表配色規則：
+    1. D/E/N/M/R/off/請假種類全部不使用底色。
+    2. 只有「班別權限」欄使用統一淺藍底色。
+    """
+
+    # 先清除資料區所有舊的班別底色。
+    no_fill = PatternFill(fill_type=None)
+
     for row in ws.iter_rows(min_row=2):
         for cell in row:
-            value = str(cell.value) if cell.value is not None else ""
-            if value in SHIFT_COLORS:
-                cell.fill = PatternFill("solid", fgColor=SHIFT_COLORS[value])
-                if value == "N":
-                    cell.font = Font(bold=True)
+            cell.fill = no_fill
+            cell.font = Font(
+                name=cell.font.name,
+                size=cell.font.size,
+                bold=False,
+                italic=cell.font.italic,
+                color="000000",
+            )
+
+    # 找「班別權限」欄，不依賴固定欄號。
+    permission_col = None
+
+    for cell in ws[1]:
+        if str(cell.value).strip() == "班別權限":
+            permission_col = cell.column
+            break
+
+    if permission_col is None:
+        return
+
+    permission_fill = PatternFill(
+        "solid",
+        fgColor=PERMISSION_CELL_COLOR
+    )
+
+    for row_idx in range(2, ws.max_row + 1):
+        cell = ws.cell(row=row_idx, column=permission_col)
+
+        # 人力統計列等沒有權限內容的列不著色。
+        value = "" if cell.value is None else str(cell.value).strip()
+
+        if value:
+            cell.fill = permission_fill
+            cell.font = Font(
+                bold=True,
+                color="000000"
+            )
