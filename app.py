@@ -3,7 +3,12 @@ import pandas as pd
 import streamlit as st
 
 from config import *
-from loader import load_request_and_permissions
+from loader import (
+    detect_file_date_range,
+    load_history_and_permission,
+    load_request_and_permissions,
+    merge_staff_records,
+)
 from utils import make_date_headers, default_manpower_by_dates
 from optimizer import optimize_schedule
 from schedule_statistics import build_schedule_dataframe, build_manpower_dataframe, build_person_statistics
@@ -11,118 +16,11 @@ from validator import validate_schedule, issues_to_dataframe
 from exporter import export_workbook
 
 # =====================================================
-# 自動從上月 2F 班表擷取：權限、上月最後班、已連上天數
-# =====================================================
-SHIFT_FOR_HISTORY = ["D", "E", "N", "M", "R", "off", "OFF", "休", "公休"]
-WORK_FOR_STREAK = ["D", "E", "N", "M"]
-PERMISSION_OPTIONS = ["DEN", "DE", "DN", "EN", "D", "E", "N"]
-
-NAME_ALIASES = {
-    "林怡微": ["林怡微", "林怡薇"],
-    "溫鈺羚": ["溫鈺羚", "温鈺羚"],
-}
-
-
-def _clean_cell(value):
-    if pd.isna(value):
-        return ""
-    text = str(value).strip()
-    text = text.replace("Ｏ", "O").replace("ｏ", "o")
-    if text.upper() == "OFF":
-        return "off"
-    if text in ["休", "公休"]:
-        return "off"
-    return text
-
-
-def _match_nurse(row_values, nurse):
-    aliases = NAME_ALIASES.get(nurse, [nurse])
-    row_text = " ".join(row_values)
-    return any(alias in row_text for alias in aliases)
-
-
-def _normalize_shift(value):
-    value = _clean_cell(value)
-    if value.upper() == "OFF":
-        return "off"
-    if value in ["休", "公休"]:
-        return "off"
-    if value in ["D", "E", "N", "M", "R", "off"]:
-        return value
-    return ""
-
-
-def load_history_and_permission(upload_file, nurse_names):
-    """
-    從上月 2F 班表自動擷取：
-    1. 權限：依上月實際出現過的 D/E/N 推估
-    2. 上月最後班：最後一個有效班別 D/E/N/M/R/off
-    3. 已連上天數：從月底往前連續 D/E/N/M 的天數
-    """
-    history_shift = {n: SHIFT_OFF for n in nurse_names}
-    history_streak = {n: 0 for n in nurse_names}
-    permissions = {n: "DEN" for n in nurse_names}
-
-    if upload_file is None:
-        return history_shift, history_streak, permissions
-
-    df = pd.read_excel(upload_file, header=None)
-
-    for _, row in df.iterrows():
-        row_values = [_clean_cell(x) for x in row.tolist()]
-
-        target = None
-        for nurse in nurse_names:
-            if _match_nurse(row_values, nurse):
-                target = nurse
-                break
-
-        if target is None:
-            continue
-
-        shifts = []
-        for cell in row_values:
-            shift = _normalize_shift(cell)
-            if shift:
-                shifts.append(shift)
-
-        if not shifts:
-            continue
-
-        history_shift[target] = shifts[-1]
-
-        streak = 0
-        for shift in reversed(shifts):
-            if shift in WORK_FOR_STREAK:
-                streak += 1
-            else:
-                break
-        history_streak[target] = min(streak, MAX_CONTINUOUS_WORK)
-
-        # 權限優先抓表格中明確權限；若沒有，就由 D/E/N 出現紀錄推估
-        explicit_perm = next((cell for cell in row_values if cell in PERMISSION_OPTIONS), "")
-        if explicit_perm:
-            permissions[target] = explicit_perm
-        else:
-            inferred = ""
-            if "D" in shifts:
-                inferred += "D"
-            if "E" in shifts:
-                inferred += "E"
-            if "N" in shifts:
-                inferred += "N"
-            if inferred:
-                permissions[target] = inferred
-
-    return history_shift, history_streak, permissions
-
-
-# =====================================================
 # Streamlit 主程式
 # =====================================================
-st.set_page_config(page_title="2F護理排班系統", layout="wide")
-st.title("🏥 2F護理排班系統")
-st.caption("AI最佳化・N→N→off→off・最多連上5天・全職休假保底・郭珍君10天D班")
+st.set_page_config(page_title="智慧護理排班系統", layout="wide")
+st.title("🏥 智慧護理排班系統")
+st.caption("支援 XLS／XLSX／CSV・自動辨識人員與跨月日期・AI 最佳化排班")
 
 if "best_result" not in st.session_state:
     st.session_state.best_result = None
@@ -136,8 +34,14 @@ with st.sidebar:
     start_date = st.date_input("開始日期", default_start)
     end_date = st.date_input("結束日期", today)
 
-    file_history = st.file_uploader("上傳【上月舊班表 / 2F班表】", type=["xlsx"])
-    file_request = st.file_uploader("上傳【當月預排休表】", type=["xlsx"])
+    file_history = st.file_uploader("上傳【上月班表】", type=["xls", "xlsx"])
+    file_request = st.file_uploader("上傳【當月要班需求】", type=["csv", "xls", "xlsx"])
+
+    auto_use_request_dates = st.checkbox(
+        "自動使用要班需求檔日期",
+        value=False,
+        help="關閉時，以你上方手動選擇的開始／結束日期為準；開啟時，才會改用要班需求檔中的日期。"
+    )
 
     st.divider()
     st.header("🧠 AI最佳化")
@@ -148,33 +52,86 @@ if end_date < start_date:
     st.error("結束日期不能早於開始日期。")
     st.stop()
 
+# 要班需求檔日期僅作為提示；是否套用由使用者決定。
+detected_start = None
+detected_end = None
+
+if file_request is not None:
+    try:
+        detected_start, detected_end = detect_file_date_range(file_request)
+
+        if auto_use_request_dates:
+            if (start_date, end_date) != (detected_start, detected_end):
+                st.info(
+                    f"已依要班需求檔自動套用排班期間："
+                    f"{detected_start.strftime('%Y/%m/%d')} ～ "
+                    f"{detected_end.strftime('%Y/%m/%d')}"
+                )
+
+            start_date, end_date = detected_start, detected_end
+
+        elif (start_date, end_date) != (detected_start, detected_end):
+            st.warning(
+                "目前使用你手動選擇的排班期間："
+                f"{start_date.strftime('%Y/%m/%d')} ～ "
+                f"{end_date.strftime('%Y/%m/%d')}。"
+                "要班需求檔內日期為："
+                f"{detected_start.strftime('%Y/%m/%d')} ～ "
+                f"{detected_end.strftime('%Y/%m/%d')}。"
+                "若要自動跟隨檔案日期，請勾選左側「自動使用要班需求檔日期」。"
+            )
+
+    except Exception as exc:
+        st.warning(f"無法辨識要班需求檔日期，將使用手動日期：{exc}")
+
 num_days = (end_date - start_date).days + 1
+expected_dates = [start_date + datetime.timedelta(days=i) for i in range(num_days)]
 date_headers = make_date_headers(start_date, num_days)
 
 if not file_request:
-    st.info("請先上傳當月【預排休表】以啟動系統。")
+    st.info("請先上傳當月【要班需求】以啟動系統。")
     st.stop()
 
 try:
-    requests, request_permissions = load_request_and_permissions(file_request, CORE_STAFF, num_days)
-    history_shift, history_streak, auto_permissions = load_history_and_permission(file_history, CORE_STAFF)
+    staff_records = merge_staff_records(file_history, file_request)
+    if not staff_records:
+        raise ValueError("檔案中找不到可排班人員。")
+    staff_names = [record["name"] for record in staff_records]
+
+    # 動態半職名單：由上月班表中的「半」班別自動辨識。
+    detected_part_time = [record["name"] for record in staff_records if record.get("is_parttime")]
+    PART_TIME[:] = detected_part_time
+
+    requests, request_permissions = load_request_and_permissions(
+        file_request, staff_records, expected_dates
+    )
+    history_shift, history_streak, auto_permissions = load_history_and_permission(
+        file_history, staff_records
+    )
 except Exception as exc:
-    st.error(f"Excel 讀取失敗：{exc}")
+    st.error(f"班表讀取失敗：{exc}")
     st.stop()
 
-# 權限來源：優先使用上月2F班表推估，若沒抓到再用預排休表，最後預設 DEN
+st.success(
+    f"已讀取 {len(staff_names)} 位人員；"
+    f"排班期間 {start_date.strftime('%m/%d')}～{end_date.strftime('%m/%d')}；"
+    f"半職 {len(PART_TIME)} 位。"
+)
+
+# 權限來源：優先使用上月班表，無法判斷時再用要班需求。
 initial_permissions = {}
-for nurse in CORE_STAFF:
+for nurse in staff_names:
     auto_perm = auto_permissions.get(nurse, "DEN")
     req_perm = request_permissions.get(nurse, "DEN")
     initial_permissions[nurse] = auto_perm if auto_perm != "DEN" else req_perm
 
 st.subheader("👥 1. 人員權限與上月狀態")
-st.caption("權限、上月最後班、已連上天數會自動從上月2F班表擷取；仍可在下方手動修正。")
+st.caption("權限、上月最後班、已連上天數會自動從上月班表擷取；仍可在下方手動修正。")
 
 config_rows = []
-for nurse in CORE_STAFF:
+for nurse in staff_names:
     config_rows.append({
+        "是否排班": True,
         "姓名": nurse,
         "權限": initial_permissions.get(nurse, "DEN"),
         "上月最後班": history_shift.get(nurse, SHIFT_OFF),
@@ -186,16 +143,24 @@ config_df = st.data_editor(
     use_container_width=True,
     num_rows="fixed",
     column_config={
+        "是否排班": st.column_config.CheckboxColumn(
+            "是否排班",
+            help="勾選＝本次排班會納入；取消勾選＝本次完全不排班。",
+            default=True,
+        ),
         "姓名": st.column_config.TextColumn("姓名", disabled=True),
         "權限": st.column_config.SelectboxColumn("權限", options=PERMISSION_OPTIONS, required=True),
         "上月最後班": st.column_config.SelectboxColumn("上月最後班", options=ALL_SHIFTS, required=True),
-        "已連上天數": st.column_config.NumberColumn("已連上天數", min_value=0, max_value=5, step=1),
+        "已連上天數": st.column_config.NumberColumn("已連上天數", min_value=0, max_value=31, step=1),
     },
 )
 
 st.subheader("📊 2. 日期區間最低人力")
 st.caption(
-    "可直接設定『幾號到幾號』需要多少 D／E／N 人力；後面的設定列會覆蓋前面的重疊設定。"
+    f"目前排班期間：{start_date.strftime('%Y/%m/%d')} ～ "
+    f"{end_date.strftime('%Y/%m/%d')}。"
+    "下方日期區間會隨左側開始／結束日期自動重建；"
+    "後面的設定列會覆蓋前面的重疊設定。"
 )
 
 # 預設：整個排班區間分成平日與假日兩筆規則
@@ -225,9 +190,15 @@ if st.session_state.get("manpower_range_key") != range_key:
     st.session_state.manpower_range_key = range_key
     st.session_state.manpower_rules_df = default_manpower_rules
 
+manpower_editor_key = (
+    f"manpower_range_editor_"
+    f"{start_date.isoformat()}_"
+    f"{end_date.isoformat()}"
+)
+
 rule_df = st.data_editor(
     st.session_state.manpower_rules_df,
-    key="manpower_range_editor",
+    key=manpower_editor_key,
     num_rows="dynamic",
     use_container_width=True,
     hide_index=True,
@@ -253,13 +224,13 @@ rule_df = st.data_editor(
             help="全部：包含平日與六日；平日：週一至週五；假日：週六、週日。",
         ),
         "D_min": st.column_config.NumberColumn(
-            "白班 D 最低人力", min_value=0, max_value=len(CORE_STAFF), step=1, required=True
+            "白班 D 最低人力", min_value=0, max_value=len(staff_names), step=1, required=True
         ),
         "E_min": st.column_config.NumberColumn(
-            "小夜 E 最低人力", min_value=0, max_value=len(CORE_STAFF), step=1, required=True
+            "小夜 E 最低人力", min_value=0, max_value=len(staff_names), step=1, required=True
         ),
         "N_min": st.column_config.NumberColumn(
-            "大夜 N 最低人力", min_value=0, max_value=len(CORE_STAFF), step=1, required=True
+            "大夜 N 最低人力", min_value=0, max_value=len(staff_names), step=1, required=True
         ),
     },
 )
@@ -367,14 +338,71 @@ with st.expander("🔎 預覽每天實際套用的人力需求", expanded=False)
         },
     )
 
+# =====================================================
+# 本次實際納入排班的人員
+# =====================================================
+
+active_staff = [
+    str(row["姓名"]).strip()
+    for _, row in config_df.iterrows()
+    if bool(row.get("是否排班", True))
+]
+
+inactive_staff = [
+    str(row["姓名"]).strip()
+    for _, row in config_df.iterrows()
+    if not bool(row.get("是否排班", True))
+]
+
+if not active_staff:
+    st.error("至少需要勾選 1 位人員參與排班。")
+    st.stop()
+
+if inactive_staff:
+    st.info("本次不參與排班：" + "、".join(inactive_staff))
+
 permissions = {}
 history_shift_final = {}
 history_streak_final = {}
+
 for _, row in config_df.iterrows():
     name = str(row["姓名"]).strip()
+
+    if name not in active_staff:
+        continue
+
     permissions[name] = str(row["權限"]).upper().strip()
     history_shift_final[name] = str(row["上月最後班"]).strip()
     history_streak_final[name] = int(row["已連上天數"])
+
+active_requests = {
+    name: requests.get(name, [""] * num_days)
+    for name in active_staff
+}
+
+PART_TIME[:] = [name for name in PART_TIME if name in active_staff]
+
+st.success(
+    f"本次納入排班 {len(active_staff)} 人；"
+    f"不排班 {len(inactive_staff)} 人。"
+)
+
+# 排班前快速檢查：最低總人力不可超過目前勾選人數
+impossible_days = []
+for day_idx, req in enumerate(manpower):
+    total_min = int(req["D_min"]) + int(req["E_min"]) + int(req["N_min"])
+    if total_min > len(active_staff):
+        impossible_days.append(
+            f"{date_headers[day_idx]}：最低需要 {total_min} 人，但目前只有 {len(active_staff)} 人參與排班"
+        )
+
+if impossible_days:
+    st.error("目前的人員勾選與最低人力需求互相衝突：")
+    for msg in impossible_days[:10]:
+        st.write("•", msg)
+    if len(impossible_days) > 10:
+        st.write(f"• 另外還有 {len(impossible_days) - 10} 天")
+    st.stop()
 
 st.divider()
 run = st.button("🚀 啟動 AI 最佳化排班", type="primary", use_container_width=True)
@@ -388,9 +416,9 @@ if run:
         status.write(f"已完成 {done}/{total} 次，目前最佳分數：{best_score}")
 
     best, top = optimize_schedule(
-        CORE_STAFF,
+        active_staff,
         permissions,
-        requests,
+        active_requests,
         manpower,
         history_shift_final,
         history_streak_final,
@@ -408,10 +436,10 @@ if st.session_state.best_result:
 
     issues = validate_schedule(
         schedule,
-        CORE_STAFF,
+        active_staff,
         manpower,
         history_shift_final,
-        requests
+        active_requests
     )
     issues_df = issues_to_dataframe(issues, date_headers)
 
@@ -422,7 +450,7 @@ if st.session_state.best_result:
 
     schedule_df = build_schedule_dataframe(
         schedule,
-        CORE_STAFF,
+        active_staff,
         date_headers,
         permissions
     )
@@ -438,15 +466,15 @@ if st.session_state.best_result:
 
     for idx, day in enumerate(date_headers):
         d_count = sum(
-            1 for nurse in CORE_STAFF
+            1 for nurse in active_staff
             if schedule[nurse][idx] == SHIFT_D
         )
         e_count = sum(
-            1 for nurse in CORE_STAFF
+            1 for nurse in active_staff
             if schedule[nurse][idx] == SHIFT_E
         )
         n_count = sum(
-            1 for nurse in CORE_STAFF
+            1 for nurse in active_staff
             if schedule[nurse][idx] == SHIFT_N
         )
 
@@ -464,11 +492,11 @@ if st.session_state.best_result:
 
     daily_df = build_manpower_dataframe(
         schedule,
-        CORE_STAFF,
+        active_staff,
         manpower,
         date_headers
     )
-    person_df = build_person_statistics(schedule, CORE_STAFF)
+    person_df = build_person_statistics(schedule, active_staff)
 
     st.subheader("🏆 排班結果")
 
