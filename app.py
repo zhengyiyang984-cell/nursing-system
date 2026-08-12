@@ -131,6 +131,7 @@ st.caption("權限、上月最後班、已連上天數會自動從上月班表�
 config_rows = []
 for nurse in staff_names:
     config_rows.append({
+        "是否排班": True,
         "姓名": nurse,
         "權限": initial_permissions.get(nurse, "DEN"),
         "上月最後班": history_shift.get(nurse, SHIFT_OFF),
@@ -142,6 +143,11 @@ config_df = st.data_editor(
     use_container_width=True,
     num_rows="fixed",
     column_config={
+        "是否排班": st.column_config.CheckboxColumn(
+            "是否排班",
+            help="勾選＝本次排班會納入；取消勾選＝本次完全不排班。",
+            default=True,
+        ),
         "姓名": st.column_config.TextColumn("姓名", disabled=True),
         "權限": st.column_config.SelectboxColumn("權限", options=PERMISSION_OPTIONS, required=True),
         "上月最後班": st.column_config.SelectboxColumn("上月最後班", options=ALL_SHIFTS, required=True),
@@ -332,14 +338,71 @@ with st.expander("🔎 預覽每天實際套用的人力需求", expanded=False)
         },
     )
 
+# =====================================================
+# 本次實際納入排班的人員
+# =====================================================
+
+active_staff = [
+    str(row["姓名"]).strip()
+    for _, row in config_df.iterrows()
+    if bool(row.get("是否排班", True))
+]
+
+inactive_staff = [
+    str(row["姓名"]).strip()
+    for _, row in config_df.iterrows()
+    if not bool(row.get("是否排班", True))
+]
+
+if not active_staff:
+    st.error("至少需要勾選 1 位人員參與排班。")
+    st.stop()
+
+if inactive_staff:
+    st.info("本次不參與排班：" + "、".join(inactive_staff))
+
 permissions = {}
 history_shift_final = {}
 history_streak_final = {}
+
 for _, row in config_df.iterrows():
     name = str(row["姓名"]).strip()
+
+    if name not in active_staff:
+        continue
+
     permissions[name] = str(row["權限"]).upper().strip()
     history_shift_final[name] = str(row["上月最後班"]).strip()
     history_streak_final[name] = int(row["已連上天數"])
+
+active_requests = {
+    name: requests.get(name, [""] * num_days)
+    for name in active_staff
+}
+
+PART_TIME[:] = [name for name in PART_TIME if name in active_staff]
+
+st.success(
+    f"本次納入排班 {len(active_staff)} 人；"
+    f"不排班 {len(inactive_staff)} 人。"
+)
+
+# 排班前快速檢查：最低總人力不可超過目前勾選人數
+impossible_days = []
+for day_idx, req in enumerate(manpower):
+    total_min = int(req["D_min"]) + int(req["E_min"]) + int(req["N_min"])
+    if total_min > len(active_staff):
+        impossible_days.append(
+            f"{date_headers[day_idx]}：最低需要 {total_min} 人，但目前只有 {len(active_staff)} 人參與排班"
+        )
+
+if impossible_days:
+    st.error("目前的人員勾選與最低人力需求互相衝突：")
+    for msg in impossible_days[:10]:
+        st.write("•", msg)
+    if len(impossible_days) > 10:
+        st.write(f"• 另外還有 {len(impossible_days) - 10} 天")
+    st.stop()
 
 st.divider()
 run = st.button("🚀 啟動 AI 最佳化排班", type="primary", use_container_width=True)
@@ -353,9 +416,9 @@ if run:
         status.write(f"已完成 {done}/{total} 次，目前最佳分數：{best_score}")
 
     best, top = optimize_schedule(
-        staff_names,
+        active_staff,
         permissions,
-        requests,
+        active_requests,
         manpower,
         history_shift_final,
         history_streak_final,
@@ -373,10 +436,10 @@ if st.session_state.best_result:
 
     issues = validate_schedule(
         schedule,
-        staff_names,
+        active_staff,
         manpower,
         history_shift_final,
-        requests
+        active_requests
     )
     issues_df = issues_to_dataframe(issues, date_headers)
 
@@ -387,7 +450,7 @@ if st.session_state.best_result:
 
     schedule_df = build_schedule_dataframe(
         schedule,
-        staff_names,
+        active_staff,
         date_headers,
         permissions
     )
@@ -403,15 +466,15 @@ if st.session_state.best_result:
 
     for idx, day in enumerate(date_headers):
         d_count = sum(
-            1 for nurse in staff_names
+            1 for nurse in active_staff
             if schedule[nurse][idx] == SHIFT_D
         )
         e_count = sum(
-            1 for nurse in staff_names
+            1 for nurse in active_staff
             if schedule[nurse][idx] == SHIFT_E
         )
         n_count = sum(
-            1 for nurse in staff_names
+            1 for nurse in active_staff
             if schedule[nurse][idx] == SHIFT_N
         )
 
@@ -429,11 +492,11 @@ if st.session_state.best_result:
 
     daily_df = build_manpower_dataframe(
         schedule,
-        staff_names,
+        active_staff,
         manpower,
         date_headers
     )
-    person_df = build_person_statistics(schedule, staff_names)
+    person_df = build_person_statistics(schedule, active_staff)
 
     st.subheader("🏆 排班結果")
 
