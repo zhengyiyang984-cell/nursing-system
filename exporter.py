@@ -16,7 +16,7 @@ def export_workbook(
 ):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        schedule_df.to_excel(writer, sheet_name="班表")
+        schedule_df.to_excel(writer, sheet_name="班表", index=False)
         manpower_df.to_excel(writer, sheet_name="每日人力", index=False)
         person_df.to_excel(writer, sheet_name="個人統計", index=False)
         issues_df.to_excel(writer, sheet_name="違規檢查", index=False)

@@ -808,6 +808,13 @@ if st.session_state.best_result:
         ignore_index=True
     )
 
+    # 最終班表編號從 1 開始；D/E/N 人力統計列不編號。
+    schedule_df.insert(
+        0,
+        "編號",
+        list(range(1, len(active_staff) + 1)) + ["", "", ""]
+    )
+
     # =====================================================
     # 最終班表問題標示
     # =====================================================
@@ -932,7 +939,8 @@ if st.session_state.best_result:
             st.dataframe(
                 schedule_styler,
                 use_container_width=True,
-                height=620
+                height=620,
+                hide_index=True
             )
 
         with col2:
