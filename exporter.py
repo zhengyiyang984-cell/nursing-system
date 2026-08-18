@@ -11,6 +11,7 @@ def export_workbook(
     person_df,
     issues_df,
     leave_df=None,
+    leave_summary_df=None,
     problem_cells=None,
     problem_names=None,
 ):
@@ -19,7 +20,17 @@ def export_workbook(
         schedule_df.to_excel(writer, sheet_name="班表", index=False)
         manpower_df.to_excel(writer, sheet_name="每日人力", index=False)
         person_df.to_excel(writer, sheet_name="個人統計", index=False)
+
+        # 獨立的休假天數彙整工作表，方便主管/護理長直接查看。
+        if leave_summary_df is not None and not leave_summary_df.empty:
+            leave_summary_df.to_excel(
+                writer,
+                sheet_name="休假天數彙整",
+                index=False
+            )
+
         issues_df.to_excel(writer, sheet_name="違規檢查", index=False)
+
         if leave_df is not None and not leave_df.empty:
             leave_df.to_excel(writer, sheet_name="請假紀錄", index=False)
 

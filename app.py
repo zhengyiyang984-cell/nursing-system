@@ -900,6 +900,82 @@ if st.session_state.best_result:
     )
     person_df = build_person_statistics(schedule, active_staff)
 
+    # =====================================================
+    # Excel 專用：休假天數彙整
+    # =====================================================
+    # 說明：
+    # - R天數（含請假）：排班核心中的 R，包含原預排休與系統請假管理轉入的 R。
+    # - off天數：系統安排的 off。
+    # - 總休假：R + off。
+    # - 各假別：由「請假管理」紀錄個別統計，不會重複加到總休假。
+    leave_summary_export_df = pd.DataFrame({
+        "編號": list(range(1, len(active_staff) + 1)),
+        "姓名": active_staff,
+    })
+
+    person_stat_by_name = (
+        person_df.set_index("姓名")
+        if not person_df.empty and "姓名" in person_df.columns
+        else pd.DataFrame()
+    )
+
+    leave_summary_export_df["R天數（含請假）"] = [
+        int(person_stat_by_name.loc[name, SHIFT_R])
+        if not person_stat_by_name.empty and name in person_stat_by_name.index
+        else 0
+        for name in active_staff
+    ]
+
+    leave_summary_export_df["off天數"] = [
+        int(person_stat_by_name.loc[name, SHIFT_OFF])
+        if not person_stat_by_name.empty and name in person_stat_by_name.index
+        else 0
+        for name in active_staff
+    ]
+
+    leave_summary_export_df["總休假(R+off)"] = [
+        int(person_stat_by_name.loc[name, "總休假"])
+        if not person_stat_by_name.empty and name in person_stat_by_name.index
+        else 0
+        for name in active_staff
+    ]
+
+    # 各類請假天數
+    if leave_export_df is not None and not leave_export_df.empty:
+        leave_pivot = (
+            leave_export_df
+            .pivot_table(
+                index="姓名",
+                columns="假別",
+                values="天數",
+                aggfunc="sum",
+                fill_value=0,
+            )
+        )
+
+        for leave_type in LEAVE_TYPES:
+            leave_summary_export_df[leave_type] = [
+                int(leave_pivot.loc[name, leave_type])
+                if name in leave_pivot.index and leave_type in leave_pivot.columns
+                else 0
+                for name in active_staff
+            ]
+
+        leave_summary_export_df["請假合計"] = [
+            int(sum(
+                leave_summary_export_df.loc[
+                    leave_summary_export_df["姓名"] == name,
+                    leave_type
+                ].iloc[0]
+                for leave_type in LEAVE_TYPES
+            ))
+            for name in active_staff
+        ]
+    else:
+        for leave_type in LEAVE_TYPES:
+            leave_summary_export_df[leave_type] = 0
+        leave_summary_export_df["請假合計"] = 0
+
     st.subheader("🏆 排班結果")
 
     c1, c2, c3 = st.columns(3)
@@ -990,6 +1066,7 @@ if st.session_state.best_result:
         person_df,
         issues_df,
         leave_export_df,
+        leave_summary_df=leave_summary_export_df,
         problem_cells=rule_problem_cells,
         problem_names=rule_problem_names,
     )
