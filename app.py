@@ -13,6 +13,7 @@ from utils import make_date_headers, default_manpower_by_dates
 from optimizer import optimize_schedule
 from schedule_statistics import build_schedule_dataframe, build_manpower_dataframe, build_person_statistics
 from validator import validate_schedule, issues_to_dataframe
+from feasibility import check_feasibility
 from exporter import export_workbook
 
 # =====================================================
@@ -45,7 +46,46 @@ with st.sidebar:
 
     st.divider()
     st.header("🧠 AI最佳化")
-    attempts = st.slider("排班嘗試次數", 10, 500, 100, step=10)
+
+    speed_mode = st.selectbox(
+        "排班速度模式",
+        ["⚡ 快速", "⚖️ 平衡", "🎯 高品質"],
+        index=1,
+        help="快速：適合反覆測試；平衡：日常使用；高品質：最後正式排班。"
+    )
+
+    if speed_mode == "⚡ 快速":
+        attempts = 25
+        local_search_top = 2
+        local_search_rounds = 4
+        patience = 8
+    elif speed_mode == "⚖️ 平衡":
+        attempts = 50
+        local_search_top = 3
+        local_search_rounds = 8
+        patience = 12
+    else:
+        attempts = 100
+        local_search_top = 5
+        local_search_rounds = 15
+        patience = 20
+
+    st.caption(
+        f"目前模式：最多 {attempts} 次候選；"
+        f"只精修前 {local_search_top} 名，每名 {local_search_rounds} 輪。"
+    )
+
+    advanced_attempts = st.checkbox("手動調整嘗試次數", value=False)
+
+    if advanced_attempts:
+        attempts = st.slider(
+            "排班嘗試次數",
+            10,
+            300,
+            attempts,
+            step=10
+        )
+
     seed = st.number_input("隨機種子（可留 0）", min_value=0, value=0, step=1)
 
 if end_date < start_date:
@@ -93,7 +133,7 @@ if not file_request:
     st.stop()
 
 try:
-    staff_records = merge_staff_records(file_history, file_request)
+    staff_records = merge_staff_records(file_history, file_request, expected_dates=expected_dates)
     if not staff_records:
         raise ValueError("檔案中找不到可排班人員。")
     staff_names = [record["name"] for record in staff_records]
@@ -361,6 +401,182 @@ if not active_staff:
 if inactive_staff:
     st.info("本次不參與排班：" + "、".join(inactive_staff))
 
+# =====================================================
+# 3. 請假管理
+# =====================================================
+st.subheader("🏖️ 3. 請假管理")
+st.caption(
+    "可新增多筆請假。請假日期會自動鎖定為不可排 D／E／N，"
+    "並在最終班表與 Excel 顯示實際假別。"
+)
+
+leave_range_key = (
+    f"{start_date.isoformat()}_{end_date.isoformat()}_"
+    + "_".join(active_staff)
+)
+
+if st.session_state.get("leave_range_key") != leave_range_key:
+    st.session_state.leave_range_key = leave_range_key
+
+    # Streamlit 的 DateColumn / CheckboxColumn 需要相容的 pandas dtype。
+    # 空 DataFrame 若全部是 object dtype，會觸發 StreamlitAPIException。
+    st.session_state.leave_records_df = pd.DataFrame({
+        "生效": pd.Series(dtype="bool"),
+        "姓名": pd.Series(dtype="string"),
+        "假別": pd.Series(dtype="string"),
+        "開始日期": pd.Series(dtype="datetime64[ns]"),
+        "結束日期": pd.Series(dtype="datetime64[ns]"),
+        "備註": pd.Series(dtype="string"),
+    })
+
+leave_editor_key = (
+    f"leave_editor_{start_date.isoformat()}_{end_date.isoformat()}_"
+    f"{len(active_staff)}"
+)
+
+# 舊版 session_state 若已建立過 object dtype 的空表，
+# 在進入 data_editor 前重新整理欄位型別。
+_leave_source = st.session_state.leave_records_df.copy()
+
+for _col in ["姓名", "假別", "備註"]:
+    if _col not in _leave_source.columns:
+        _leave_source[_col] = pd.Series(dtype="string")
+    else:
+        _leave_source[_col] = _leave_source[_col].astype("string")
+
+if "生效" not in _leave_source.columns:
+    _leave_source["生效"] = pd.Series(dtype="bool")
+elif not _leave_source.empty:
+    _leave_source["生效"] = _leave_source["生效"].fillna(True).astype(bool)
+else:
+    _leave_source["生效"] = pd.Series(dtype="bool")
+
+for _col in ["開始日期", "結束日期"]:
+    if _col not in _leave_source.columns:
+        _leave_source[_col] = pd.Series(dtype="datetime64[ns]")
+    else:
+        _leave_source[_col] = pd.to_datetime(_leave_source[_col], errors="coerce")
+
+_leave_source = _leave_source[
+    ["生效", "姓名", "假別", "開始日期", "結束日期", "備註"]
+]
+
+leave_df = st.data_editor(
+    _leave_source,
+    key=leave_editor_key,
+    num_rows="dynamic",
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "生效": st.column_config.CheckboxColumn(
+            "生效",
+            default=True,
+            help="取消勾選後，該筆請假不會套用到本次排班。",
+        ),
+        "姓名": st.column_config.SelectboxColumn(
+            "姓名",
+            options=active_staff,
+            required=True,
+        ),
+        "假別": st.column_config.SelectboxColumn(
+            "假別",
+            options=LEAVE_TYPES,
+            required=True,
+        ),
+        "開始日期": st.column_config.DateColumn(
+            "開始日期",
+            min_value=start_date,
+            max_value=end_date,
+            format="MM/DD",
+            required=True,
+        ),
+        "結束日期": st.column_config.DateColumn(
+            "結束日期",
+            min_value=start_date,
+            max_value=end_date,
+            format="MM/DD",
+            required=True,
+        ),
+        "備註": st.column_config.TextColumn(
+            "備註",
+            help="選填，例如：住院、家庭事務、研習等。",
+        ),
+    },
+)
+
+st.session_state.leave_records_df = leave_df.copy()
+
+leave_errors = []
+leave_warnings = []
+clean_leave_records = []
+leave_detail_rows = []
+
+for row_no, (_, row) in enumerate(leave_df.iterrows(), start=1):
+    if not bool(row.get("生效", True)):
+        continue
+
+    try:
+        nurse = str(row["姓名"]).strip()
+        leave_type = str(row["假別"]).strip()
+        leave_start = pd.to_datetime(row["開始日期"]).date()
+        leave_end = pd.to_datetime(row["結束日期"]).date()
+        note = "" if pd.isna(row.get("備註", "")) else str(row.get("備註", "")).strip()
+    except Exception:
+        leave_errors.append(f"第 {row_no} 筆請假資料不完整。")
+        continue
+
+    if nurse not in active_staff:
+        leave_errors.append(f"第 {row_no} 筆：{nurse} 目前未參與排班。")
+        continue
+    if leave_type not in LEAVE_TYPES:
+        leave_errors.append(f"第 {row_no} 筆：假別不正確。")
+        continue
+    if leave_start > leave_end:
+        leave_errors.append(f"第 {row_no} 筆：開始日期不能晚於結束日期。")
+        continue
+    if leave_start < start_date or leave_end > end_date:
+        leave_errors.append(f"第 {row_no} 筆：請假日期必須落在本次排班期間內。")
+        continue
+
+    clean_leave_records.append({
+        "姓名": nurse,
+        "假別": leave_type,
+        "開始日期": leave_start,
+        "結束日期": leave_end,
+        "備註": note,
+    })
+
+    leave_detail_rows.append({
+        "姓名": nurse,
+        "假別": leave_type,
+        "開始日期": leave_start,
+        "結束日期": leave_end,
+        "天數": (leave_end - leave_start).days + 1,
+        "備註": note,
+    })
+
+if leave_errors:
+    for message in leave_errors:
+        st.error(message)
+    st.stop()
+
+leave_export_df = pd.DataFrame(
+    leave_detail_rows,
+    columns=["姓名", "假別", "開始日期", "結束日期", "天數", "備註"]
+)
+
+if clean_leave_records:
+    with st.expander("📋 查看本次請假紀錄", expanded=False):
+        st.dataframe(
+            leave_export_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "開始日期": st.column_config.DateColumn("開始日期", format="MM/DD"),
+                "結束日期": st.column_config.DateColumn("結束日期", format="MM/DD"),
+            },
+        )
+
 permissions = {}
 history_shift_final = {}
 history_streak_final = {}
@@ -376,9 +592,41 @@ for _, row in config_df.iterrows():
     history_streak_final[name] = int(row["已連上天數"])
 
 active_requests = {
-    name: requests.get(name, [""] * num_days)
+    name: list(requests.get(name, [""] * num_days))
     for name in active_staff
 }
+
+# 請假在排班核心中轉成 R，確保 Scheduler 不會安排 D/E/N。
+# 同一天若原本已有 D/E/N/M 預排，請假優先，並在畫面提醒。
+leave_display_map = {}
+
+for record in clean_leave_records:
+    nurse = record["姓名"]
+    leave_type = record["假別"]
+    leave_code = LEAVE_DISPLAY_CODES.get(leave_type, leave_type)
+
+    current_date = record["開始日期"]
+    while current_date <= record["結束日期"]:
+        day_idx = (current_date - start_date).days
+
+        if 0 <= day_idx < num_days:
+            original_req = active_requests[nurse][day_idx]
+
+            if original_req not in ["", SHIFT_R, SHIFT_OFF]:
+                leave_warnings.append(
+                    f"{nurse} {current_date.strftime('%m/%d')} "
+                    f"原預排為 {original_req}，已由「{leave_type}」覆蓋。"
+                )
+
+            active_requests[nurse][day_idx] = SHIFT_R
+            leave_display_map[(nurse, day_idx)] = leave_code
+
+        current_date += datetime.timedelta(days=1)
+
+if leave_warnings:
+    with st.expander("⚠️ 請假與原預排衝突提醒", expanded=False):
+        for message in sorted(set(leave_warnings)):
+            st.warning(message)
 
 PART_TIME[:] = [name for name in PART_TIME if name in active_staff]
 
@@ -387,13 +635,21 @@ st.success(
     f"不排班 {len(inactive_staff)} 人。"
 )
 
-# 排班前快速檢查：最低總人力不可超過目前勾選人數
+# 排班前快速檢查：最低總人力不可超過當天實際可排人數
 impossible_days = []
 for day_idx, req in enumerate(manpower):
     total_min = int(req["D_min"]) + int(req["E_min"]) + int(req["N_min"])
-    if total_min > len(active_staff):
+
+    people_on_leave = sum(
+        1 for nurse in active_staff
+        if active_requests[nurse][day_idx] == SHIFT_R
+    )
+    available_count = len(active_staff) - people_on_leave
+
+    if total_min > available_count:
         impossible_days.append(
-            f"{date_headers[day_idx]}：最低需要 {total_min} 人，但目前只有 {len(active_staff)} 人參與排班"
+            f"{date_headers[day_idx]}：最低需要 {total_min} 人，"
+            f"當天請假/預休 {people_on_leave} 人，可排人數僅 {available_count} 人"
         )
 
 if impossible_days:
@@ -403,6 +659,46 @@ if impossible_days:
     if len(impossible_days) > 10:
         st.write(f"• 另外還有 {len(impossible_days) - 10} 天")
     st.stop()
+
+# =====================================================
+# V27：正式排班前先做硬性條件可行性檢查
+# =====================================================
+feasibility_issues = check_feasibility(
+    active_staff,
+    permissions,
+    active_requests,
+    manpower,
+    history_shift_final,
+    history_streak_final,
+)
+
+feasibility_errors = [
+    item for item in feasibility_issues
+    if item.get("severity") == "error"
+]
+
+if feasibility_errors:
+    st.error(
+        f"⛔ 排班前可行性檢查發現 {len(feasibility_errors)} 個硬性衝突，"
+        "目前條件很可能無法產生 0 Error 班表。"
+    )
+
+    feasibility_df = issues_to_dataframe(
+        feasibility_errors,
+        date_headers
+    )
+    st.dataframe(
+        feasibility_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.info(
+        "請先調整請假/預排、班別權限或最低人力。"
+        "修正後系統才會開放正式排班，避免浪費時間產生錯誤班表。"
+    )
+    st.stop()
+else:
+    st.success("✅ 排班前硬性條件檢查通過，可以開始搜尋 0 Error 班表。")
 
 st.divider()
 run = st.button("🚀 啟動 AI 最佳化排班", type="primary", use_container_width=True)
@@ -425,10 +721,25 @@ if run:
         attempts=attempts,
         base_seed=None if seed == 0 else int(seed),
         progress_callback=update_progress,
+        local_search_top=local_search_top,
+        local_search_rounds=local_search_rounds,
+        patience=patience,
     )
     st.session_state.best_result = best
     st.session_state.top_results = top
-    st.success(f"排班完成，最佳分數：{best['score']}")
+
+    best_error_count = sum(
+        1 for item in best.get("issues", [])
+        if item.get("severity") == "error"
+    )
+
+    if best_error_count == 0:
+        st.success(f"✅ 排班完成：0 Error，最佳分數：{best['score']}")
+    else:
+        st.warning(
+            f"排班完成，但最佳結果仍有 {best_error_count} 個 Error。"
+            "系統已優先選擇 Error 最少的班表，請查看規則檢查。"
+        )
 
 if st.session_state.best_result:
     best = st.session_state.best_result
@@ -454,6 +765,13 @@ if st.session_state.best_result:
         date_headers,
         permissions
     )
+
+    # 顯示用班表：內部 R 仍保留給 Validator/統計，
+    # 畫面與 Excel 則顯示實際假別（特休、病假、事假...）。
+    for (nurse, day_idx), leave_code in leave_display_map.items():
+        if day_idx < len(date_headers):
+            mask = schedule_df["姓名"] == nurse
+            schedule_df.loc[mask, date_headers[day_idx]] = leave_code
 
     # ===== 人力統計直接加到班表底部 =====
     d_row = {col: "" for col in schedule_df.columns}
@@ -490,6 +808,90 @@ if st.session_state.best_result:
         ignore_index=True
     )
 
+    # 最終班表編號從 1 開始；D/E/N 人力統計列不編號。
+    schedule_df.insert(
+        0,
+        "編號",
+        list(range(1, len(active_staff) + 1)) + ["", "", ""]
+    )
+
+    # =====================================================
+    # 最終班表問題標示
+    # =====================================================
+    # 1) 人力多/少：D/E/N 實際人數只要不等於設定的最低人力，就標紅。
+    # 2) 規則檢查：有指定「人員 + 日期」的問題，直接標紅該格。
+    # 3) 全月型問題（例如休假不足、連上過長），將該人姓名標紅。
+    manpower_problem_cells = set()
+    rule_problem_cells = set()
+    rule_problem_names = set()
+
+    for day_idx, day_header in enumerate(date_headers):
+        for shift, row_name in [
+            (SHIFT_D, "D人力"),
+            (SHIFT_E, "E人力"),
+            (SHIFT_N, "N人力"),
+        ]:
+            actual = sum(
+                1 for nurse in active_staff
+                if schedule[nurse][day_idx] == shift
+            )
+            required = int(manpower[day_idx].get(f"{shift}_min", 0) or 0)
+
+            if actual != required:
+                manpower_problem_cells.add((row_name, day_header))
+
+    for issue in issues:
+        nurse = str(issue.get("nurse", "") or "").strip()
+        day_idx = issue.get("day")
+
+        if nurse and isinstance(day_idx, int) and 0 <= day_idx < len(date_headers):
+            rule_problem_cells.add((nurse, date_headers[day_idx]))
+        elif nurse:
+            rule_problem_names.add(nurse)
+
+    def style_final_schedule(df):
+        styles = pd.DataFrame("", index=df.index, columns=df.columns)
+
+        # 班別權限：正常情況固定淺藍底。
+        if "班別權限" in df.columns:
+            for idx in df.index:
+                value = str(df.at[idx, "班別權限"]).strip()
+                if value:
+                    styles.at[idx, "班別權限"] = (
+                        "background-color: #D9EAF7; "
+                        "color: #000000; "
+                        "font-weight: bold;"
+                    )
+
+        # 規則檢查有指定日期的問題。
+        for idx in df.index:
+            name = str(df.at[idx, "姓名"]).strip() if "姓名" in df.columns else ""
+
+            if name in rule_problem_names and "姓名" in df.columns:
+                styles.at[idx, "姓名"] = (
+                    "background-color: #FFC7CE; "
+                    "color: #9C0006; "
+                    "font-weight: bold;"
+                )
+
+            for col in date_headers:
+                if col not in df.columns:
+                    continue
+
+                if (name, col) in rule_problem_cells or (name, col) in manpower_problem_cells:
+                    styles.at[idx, col] = (
+                        "background-color: #FFC7CE; "
+                        "color: #9C0006; "
+                        "font-weight: bold;"
+                    )
+
+        return styles
+
+    schedule_styler = (
+        schedule_df.style
+        .apply(style_final_schedule, axis=None)
+    )
+
     daily_df = build_manpower_dataframe(
         schedule,
         active_staff,
@@ -498,12 +900,88 @@ if st.session_state.best_result:
     )
     person_df = build_person_statistics(schedule, active_staff)
 
+    # =====================================================
+    # Excel 專用：休假天數彙整
+    # =====================================================
+    # 說明：
+    # - R天數（含請假）：排班核心中的 R，包含原預排休與系統請假管理轉入的 R。
+    # - off天數：系統安排的 off。
+    # - 總休假：R + off。
+    # - 各假別：由「請假管理」紀錄個別統計，不會重複加到總休假。
+    leave_summary_export_df = pd.DataFrame({
+        "編號": list(range(1, len(active_staff) + 1)),
+        "姓名": active_staff,
+    })
+
+    person_stat_by_name = (
+        person_df.set_index("姓名")
+        if not person_df.empty and "姓名" in person_df.columns
+        else pd.DataFrame()
+    )
+
+    leave_summary_export_df["R天數（含請假）"] = [
+        int(person_stat_by_name.loc[name, SHIFT_R])
+        if not person_stat_by_name.empty and name in person_stat_by_name.index
+        else 0
+        for name in active_staff
+    ]
+
+    leave_summary_export_df["off天數"] = [
+        int(person_stat_by_name.loc[name, SHIFT_OFF])
+        if not person_stat_by_name.empty and name in person_stat_by_name.index
+        else 0
+        for name in active_staff
+    ]
+
+    leave_summary_export_df["總休假(R+off)"] = [
+        int(person_stat_by_name.loc[name, "總休假"])
+        if not person_stat_by_name.empty and name in person_stat_by_name.index
+        else 0
+        for name in active_staff
+    ]
+
+    # 各類請假天數
+    if leave_export_df is not None and not leave_export_df.empty:
+        leave_pivot = (
+            leave_export_df
+            .pivot_table(
+                index="姓名",
+                columns="假別",
+                values="天數",
+                aggfunc="sum",
+                fill_value=0,
+            )
+        )
+
+        for leave_type in LEAVE_TYPES:
+            leave_summary_export_df[leave_type] = [
+                int(leave_pivot.loc[name, leave_type])
+                if name in leave_pivot.index and leave_type in leave_pivot.columns
+                else 0
+                for name in active_staff
+            ]
+
+        leave_summary_export_df["請假合計"] = [
+            int(sum(
+                leave_summary_export_df.loc[
+                    leave_summary_export_df["姓名"] == name,
+                    leave_type
+                ].iloc[0]
+                for leave_type in LEAVE_TYPES
+            ))
+            for name in active_staff
+        ]
+    else:
+        for leave_type in LEAVE_TYPES:
+            leave_summary_export_df[leave_type] = 0
+        leave_summary_export_df["請假合計"] = 0
+
     st.subheader("🏆 排班結果")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("最佳分數", best["score"])
     c2.metric("違規/提醒數", len(issues))
-    c3.metric("嘗試次數", attempts)
+    c3.metric("最多嘗試次數", attempts)
 
     if st.session_state.top_results:
         ranking_df = pd.DataFrame([
@@ -521,7 +999,8 @@ if st.session_state.best_result:
 
     tabs = st.tabs([
         "📅 最終班表",
-        "🔍 規則檢查"
+        "🔍 規則檢查",
+        "🏖️ 請假紀錄"
     ])
 
     with tabs[0]:
@@ -529,10 +1008,15 @@ if st.session_state.best_result:
 
         with col1:
             st.subheader("📅 最終班表")
+            st.caption(
+                "🔴 紅色＝當日人力多/少於設定，或規則檢查有問題；"
+                "淺藍色＝班別權限。正常班別 D/E/N 不上色。"
+            )
             st.dataframe(
-                schedule_df,
+                schedule_styler,
                 use_container_width=True,
-                height=620
+                height=620,
+                hide_index=True
             )
 
         with col2:
@@ -553,11 +1037,38 @@ if st.session_state.best_result:
                 use_container_width=True
             )
 
+    with tabs[2]:
+        if leave_export_df.empty:
+            st.info("本次沒有新增請假紀錄。")
+        else:
+            st.dataframe(
+                leave_export_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "開始日期": st.column_config.DateColumn("開始日期", format="MM/DD"),
+                    "結束日期": st.column_config.DateColumn("結束日期", format="MM/DD"),
+                },
+            )
+
+            leave_summary_df = (
+                leave_export_df
+                .groupby(["姓名", "假別"], as_index=False)["天數"]
+                .sum()
+                .sort_values(["姓名", "假別"])
+            )
+            st.subheader("📊 請假統計")
+            st.dataframe(leave_summary_df, use_container_width=True, hide_index=True)
+
     excel_bytes = export_workbook(
         schedule_df,
         daily_df,
         person_df,
-        issues_df
+        issues_df,
+        leave_export_df,
+        leave_summary_df=leave_summary_export_df,
+        problem_cells=rule_problem_cells,
+        problem_names=rule_problem_names,
     )
 
     st.download_button(

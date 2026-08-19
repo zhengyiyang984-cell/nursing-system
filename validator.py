@@ -123,11 +123,11 @@ def _check_night_pattern(schedule, names, requests, issues):
 
 def _check_manpower(schedule, names, manpower, issues):
     days = len(manpower)
+
     for d in range(days):
         for shift in CLINICAL_SHIFTS:
             actual = _shift_count(schedule, names, d, shift)
             min_req = int(manpower[d].get(f"{shift}_min", 0))
-            max_req = int(manpower[d].get(f"{shift}_max", 999))
 
             if actual < min_req:
                 issues.append(_issue(
@@ -138,16 +138,6 @@ def _check_manpower(schedule, names, manpower, issues):
                     f"{shift} 目前 {actual} 人，低於最低需求 {min_req} 人。",
                     "error",
                     "請補足人力，或調整該週人力最低需求。",
-                ))
-            if actual > max_req:
-                issues.append(_issue(
-                    "每日人力超過",
-                    "",
-                    d,
-                    shift,
-                    f"{shift} 目前 {actual} 人，高於最高限制 {max_req} 人。",
-                    "warning",
-                    "可考慮將多出人員改為 off 或其他缺人班別。",
                 ))
 
 
@@ -218,7 +208,7 @@ def _check_holidays_and_streaks(schedule, names, history_streak, issues):
 
         if nurse in PART_TIME:
             d_count = sum(1 for x in row if x == PARTTIME_ALLOWED_SHIFT)
-            invalid = sum(1 for x in row if x not in [PARTTIME_ALLOWED_SHIFT, SHIFT_OFF, SHIFT_R, ""])
+            invalid = sum(1 for x in row if x not in [PARTTIME_ALLOWED_SHIFT, SHIFT_M, SHIFT_OFF, SHIFT_R, ""])
             if d_count != PARTTIME_DAYS:
                 issues.append(_issue(
                     "兼職天數",
@@ -235,7 +225,7 @@ def _check_holidays_and_streaks(schedule, names, history_streak, issues):
                     nurse,
                     None,
                     "",
-                    "兼職只能排 D/off/R，不能排 E/N/M。",
+                    "兼職只能排 D/M/off/R，不能排 E/N。",
                     "error",
                     "請將兼職非 D 班別改為 off 或移給全職。",
                 ))
@@ -332,4 +322,22 @@ def issues_to_dataframe(issues, date_headers=None):
             "建議": item.get("suggestion", ""),
             "嚴重度": item.get("severity", "warning"),
         })
+    return pd.DataFrame(rows)
+
+
+def daily_manpower_dataframe(schedule, names, manpower, date_headers=None):
+    """輸出每日 D/E/N 實際人力與 Min/Max，供 UI 或除錯使用。"""
+    rows = []
+    date_headers = date_headers or []
+    for day in range(len(manpower)):
+        row = {
+            "日期": date_headers[day] if day < len(date_headers) else f"第 {day + 1} 天",
+        }
+        for shift in CLINICAL_SHIFTS:
+            actual = _shift_count(schedule, names, day, shift)
+            min_req = int(manpower[day].get(f"{shift}_min", 0) or 0)
+            row[f"{shift}_實際"] = actual
+            row[f"{shift}_Min"] = min_req
+            row[f"{shift}_狀態"] = "不足" if actual < min_req else "OK"
+        rows.append(row)
     return pd.DataFrame(rows)
