@@ -202,6 +202,10 @@ st.caption(
     "下方日期區間會隨左側開始／結束日期自動重建；"
     "後面的設定列會覆蓋前面的重疊設定。"
 )
+st.info(
+    "修改 D／E／N 人力後不會再自動跳回預設值。"
+    "可直接用目前畫面數值排班；若希望之後操作其他元件也保留，請按「💾 儲存人力設定」。"
+)
 
 # 預設：整個排班區間分成平日與假日兩筆規則
 # 使用實際日期而不是單純 1～31，跨月份時也能正確運作。
@@ -224,20 +228,22 @@ default_manpower_rules = pd.DataFrame([
     },
 ])
 
-# 日期範圍改變時，重建預設設定；同一日期範圍內 rerun 則保留使用者編輯值。
+# 日期範圍改變時才重建預設設定；同一日期範圍內保留使用者編輯值。
 range_key = f"{start_date.isoformat()}_{end_date.isoformat()}"
+
 if st.session_state.get("manpower_range_key") != range_key:
     st.session_state.manpower_range_key = range_key
-    st.session_state.manpower_rules_df = default_manpower_rules
+    st.session_state.manpower_rules_df = default_manpower_rules.copy()
 
-manpower_editor_key = (
-    f"manpower_range_editor_"
-    f"{start_date.isoformat()}_"
-    f"{end_date.isoformat()}"
-)
+elif "manpower_rules_df" not in st.session_state:
+    st.session_state.manpower_rules_df = default_manpower_rules.copy()
+
+# data_editor 使用固定且與日期區間綁定的 key。
+# 不再在每次 rerun 後直接覆蓋 session_state，避免數值跳回預設。
+manpower_editor_key = f"manpower_range_editor_{range_key}"
 
 rule_df = st.data_editor(
-    st.session_state.manpower_rules_df,
+    st.session_state.manpower_rules_df.copy(),
     key=manpower_editor_key,
     num_rows="dynamic",
     use_container_width=True,
@@ -275,8 +281,41 @@ rule_df = st.data_editor(
     },
 )
 
-# 保存目前編輯值，避免按其他元件造成 rerun 後消失。
-st.session_state.manpower_rules_df = rule_df.copy()
+# =====================================================
+# 人力設定儲存
+# =====================================================
+# 避免每次 data_editor rerun 都把舊值寫回去，改成明確儲存。
+save_col, reset_col = st.columns([1, 1])
+
+with save_col:
+    save_manpower = st.button(
+        "💾 儲存人力設定",
+        use_container_width=True,
+        key=f"save_manpower_{range_key}",
+    )
+
+with reset_col:
+    reset_manpower = st.button(
+        "↩️ 重設為預設人力",
+        use_container_width=True,
+        key=f"reset_manpower_{range_key}",
+    )
+
+if save_manpower:
+    st.session_state.manpower_rules_df = rule_df.copy()
+    st.success("✅ 人力設定已儲存。")
+
+if reset_manpower:
+    st.session_state.manpower_rules_df = default_manpower_rules.copy()
+
+    # 清除此日期區間的 data_editor widget state，避免舊編輯值殘留。
+    if manpower_editor_key in st.session_state:
+        del st.session_state[manpower_editor_key]
+
+    st.rerun()
+
+# 排班與預覽直接使用畫面目前值，
+# 因此即使尚未按「儲存」，本次按下排班仍會套用你剛剛修改的數字。
 
 # 先檢查區間設定是否合法。
 rule_errors = []
