@@ -77,6 +77,17 @@ def score_schedule(schedule, names, manpower, history_shift, requests, history_s
         score -= safe_stdev(work_counts) * 500
         score -= safe_stdev(off_counts) * 300
 
+        # 休假以 8 天為主要目標；9 天可接受，但會有小幅扣分。
+        for off_count in off_counts:
+            if off_count < MIN_FULLTIME_OFF_DAYS:
+                score -= (MIN_FULLTIME_OFF_DAYS - off_count) * 10000
+            elif off_count == TARGET_FULLTIME_OFF_DAYS:
+                pass
+            elif off_count <= MAX_FULLTIME_OFF_DAYS:
+                score -= (off_count - TARGET_FULLTIME_OFF_DAYS) * 800
+            else:
+                score -= (off_count - MAX_FULLTIME_OFF_DAYS) * 5000
+
     return round(score, 2), issues
 
 

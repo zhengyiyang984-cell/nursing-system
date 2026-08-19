@@ -33,7 +33,8 @@ PARTTIME_ALLOWED_SHIFT = globals().get("PARTTIME_ALLOWED_SHIFT", SHIFT_D)
 
 MAX_CONTINUOUS_WORK = globals().get("MAX_CONTINUOUS_WORK", 5)
 MIN_FULLTIME_OFF_DAYS = globals().get("MIN_FULLTIME_OFF_DAYS", 8)
-TARGET_FULLTIME_OFF_DAYS = globals().get("TARGET_FULLTIME_OFF_DAYS", 9)
+TARGET_FULLTIME_OFF_DAYS = globals().get("TARGET_FULLTIME_OFF_DAYS", 8)
+MAX_FULLTIME_OFF_DAYS = globals().get("MAX_FULLTIME_OFF_DAYS", 9)
 
 FORBIDDEN_TRANSITIONS = globals().get(
     "FORBIDDEN_TRANSITIONS",
@@ -843,42 +844,120 @@ class NurseScheduler:
                     break
 
     def _balance_holidays(self):
+        """
+        V27.4 休假策略：
+        - 全職月休以 8 天為主要目標。
+        - 系統自動補休最多補到 9 天。
+        - 每個完整 7 天區段：至少 1 天休，優先嘗試排到 2 天休。
+        - 若某週因人力/預排限制只能 1 天休，不硬塞第 2 天，
+          之後再從其他日期補到全月 8 天。
+        """
         full_time = [n for n in self.names if self._is_fulltime(n)]
 
-        for _ in range(40):
+        for _ in range(50):
             changed = False
-            off_counts = {n: sum(1 for x in self.schedule[n] if x in REST_SHIFTS) for n in full_time}
+            off_counts = {
+                n: sum(1 for x in self.schedule[n] if x in REST_SHIFTS)
+                for n in full_time
+            }
 
-            # 每週至少一天休
+            # -------------------------------------------------
+            # A. 每 7 天至少 1 天休（必要）
+            # -------------------------------------------------
             for nurse in sorted(full_time, key=lambda n: off_counts[n]):
+                if off_counts[nurse] >= MAX_FULLTIME_OFF_DAYS:
+                    continue
+
                 for start in range(0, self.days, 7):
                     end = min(start + 7, self.days)
                     block = self.schedule[nurse][start:end]
-                    if len(block) >= 5 and not any(x in REST_SHIFTS for x in block):
-                        if self._create_holiday(nurse, start, end, off_counts):
+
+                    # 剩餘不足 5 天的尾段不強制視為一整週。
+                    if len(block) < 5:
+                        continue
+
+                    rest_count = sum(1 for x in block if x in REST_SHIFTS)
+
+                    if rest_count == 0:
+                        if self._create_holiday(
+                            nurse, start, end, off_counts,
+                            max_total=MAX_FULLTIME_OFF_DAYS
+                        ):
+                            off_counts[nurse] += 1
                             changed = True
                             break
+
                 if changed:
                     break
 
             if changed:
                 continue
 
-            # 全職至少 8 天休
-            under = [n for n in full_time if off_counts[n] < MIN_FULLTIME_OFF_DAYS]
+            # -------------------------------------------------
+            # B. 每個完整 7 天區段優先嘗試補到 2 天休
+            #    但只在該人全月休假仍 < 8 天時進行。
+            # -------------------------------------------------
+            for nurse in sorted(full_time, key=lambda n: off_counts[n]):
+                if off_counts[nurse] >= TARGET_FULLTIME_OFF_DAYS:
+                    continue
+
+                for start in range(0, self.days, 7):
+                    end = min(start + 7, self.days)
+                    block = self.schedule[nurse][start:end]
+
+                    if len(block) < 7:
+                        continue
+
+                    rest_count = sum(1 for x in block if x in REST_SHIFTS)
+
+                    if rest_count < 2:
+                        if self._create_holiday(
+                            nurse, start, end, off_counts,
+                            max_total=TARGET_FULLTIME_OFF_DAYS
+                        ):
+                            off_counts[nurse] += 1
+                            changed = True
+                            break
+
+                if changed:
+                    break
+
+            if changed:
+                continue
+
+            # -------------------------------------------------
+            # C. 若每週分配後仍不足 8 天，從全月其他合適日期補足
+            # -------------------------------------------------
+            under = [
+                n for n in full_time
+                if off_counts[n] < MIN_FULLTIME_OFF_DAYS
+            ]
+
             if not under:
                 break
 
             under.sort(key=lambda n: off_counts[n])
+
             for nurse in under:
-                if self._create_holiday(nurse, 0, self.days, off_counts):
+                if self._create_holiday(
+                    nurse, 0, self.days, off_counts,
+                    max_total=TARGET_FULLTIME_OFF_DAYS
+                ):
                     changed = True
                     break
 
             if not changed:
                 break
 
-    def _create_holiday(self, nurse, start, end, off_counts):
+    def _create_holiday(self, nurse, start, end, off_counts, max_total=None):
+        current_total = sum(
+            1 for x in self.schedule[nurse]
+            if x in REST_SHIFTS
+        )
+
+        if max_total is not None and current_total >= max_total:
+            return False
+
         for day in self._holiday_candidate_days(nurse, start, end):
             shift = self.schedule[nurse][day]
             if shift not in [SHIFT_D, SHIFT_E]:

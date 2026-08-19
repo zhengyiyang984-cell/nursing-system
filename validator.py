@@ -28,6 +28,8 @@ PARTTIME_ALLOWED_SHIFT = globals().get("PARTTIME_ALLOWED_SHIFT", SHIFT_D)
 
 MAX_CONTINUOUS_WORK = globals().get("MAX_CONTINUOUS_WORK", 5)
 MIN_FULLTIME_OFF_DAYS = globals().get("MIN_FULLTIME_OFF_DAYS", 8)
+TARGET_FULLTIME_OFF_DAYS = globals().get("TARGET_FULLTIME_OFF_DAYS", 8)
+MAX_FULLTIME_OFF_DAYS = globals().get("MAX_FULLTIME_OFF_DAYS", 9)
 FORBIDDEN_TRANSITIONS = globals().get(
     "FORBIDDEN_TRANSITIONS",
     [(SHIFT_E, SHIFT_D), (SHIFT_N, SHIFT_D), (SHIFT_N, SHIFT_E)],
@@ -243,6 +245,17 @@ def _check_holidays_and_streaks(schedule, names, history_streak, issues):
                 "請用休假較多者頂替此人的部分班別。",
             ))
 
+        elif off_total > MAX_FULLTIME_OFF_DAYS:
+            issues.append(_issue(
+                "全職休假偏多",
+                nurse,
+                None,
+                "",
+                f"全職休假建議以 {TARGET_FULLTIME_OFF_DAYS} 天為主，最多約 {MAX_FULLTIME_OFF_DAYS} 天，目前 {off_total} 天。",
+                "warning",
+                "若不是固定預排休/請假造成，可將部分 off 調回工作班。",
+            ))
+
         longest = _longest_work_streak(row, history_streak.get(nurse, 0))
         if longest > MAX_CONTINUOUS_WORK:
             issues.append(_issue(
@@ -255,18 +268,38 @@ def _check_holidays_and_streaks(schedule, names, history_streak, issues):
                 "請在連班中間插入 off/R。",
             ))
 
-        # 每 7 天至少一天休；以本月第1天開始切週。
+        # 每 7 天至少 1 天休，完整 7 天區段建議 2 天休。
         for start in range(0, days, 7):
             block = row[start:min(start + 7, days)]
-            if len(block) >= 5 and not any(x in REST_SHIFTS for x in block):
+
+            if len(block) < 5:
+                continue
+
+            rest_count = sum(
+                1 for x in block
+                if x in REST_SHIFTS
+            )
+
+            if rest_count == 0:
                 issues.append(_issue(
                     "每週休假不足",
                     nurse,
                     start,
                     "",
-                    f"第 {start // 7 + 1} 週未安排休假。",
+                    f"第 {start // 7 + 1} 週沒有休假。",
+                    "error",
+                    "每 7 天至少安排 1 天 off/R；建議盡量安排 2 天。",
+                ))
+
+            elif len(block) == 7 and rest_count == 1:
+                issues.append(_issue(
+                    "每週休假偏少",
+                    nurse,
+                    start,
+                    "",
+                    f"第 {start // 7 + 1} 週只有 1 天休假。",
                     "warning",
-                    "請該週至少安排 1 天 off/R。",
+                    "本週若無法排第 2 天，可在後續日期補足，讓全月休假以 8 天為主。",
                 ))
 
         for d in _single_day_fragments(row):
