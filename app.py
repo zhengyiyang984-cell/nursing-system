@@ -133,7 +133,7 @@ if not file_request:
     st.stop()
 
 try:
-    staff_records = merge_staff_records(file_history, file_request)
+    staff_records = merge_staff_records(file_history, file_request, expected_dates=expected_dates)
     if not staff_records:
         raise ValueError("檔案中找不到可排班人員。")
     staff_names = [record["name"] for record in staff_records]
